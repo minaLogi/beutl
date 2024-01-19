@@ -1,5 +1,4 @@
-﻿using Avalonia;
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 
@@ -34,8 +33,11 @@ public partial class StorageDetailPage : UserControl
 
             if (await dialog.ShowAsync() == ContentDialogResult.Primary)
             {
-                await itemViewModel.Model.UpdateAsync(
-                    new Api.UpdateAssetRequest(!current));
+                using (await itemViewModel.Model.Lock.LockAsync())
+                {
+                    await itemViewModel.Model.UpdateAsync(
+                        new Api.UpdateAssetRequest(!current));
+                }
             }
         }
     }
@@ -72,7 +74,6 @@ public partial class StorageDetailPage : UserControl
 
     private async void UploadClick(object? sender, RoutedEventArgs e)
     {
-        // Todo:
         if (DataContext is StorageDetailPageViewModel viewModel)
         {
             var dialog = new CreateAsset

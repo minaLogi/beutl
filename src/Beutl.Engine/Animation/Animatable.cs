@@ -2,6 +2,7 @@
 using System.Text.Json.Nodes;
 
 using Beutl.Media;
+using Beutl.Serialization;
 
 namespace Beutl.Animation;
 
@@ -18,7 +19,7 @@ public abstract class Animatable : CoreObject, IAnimatable
 
     protected Animatable()
     {
-        Animations = new();
+        Animations = [];
     }
 
     [NotAutoSerialized]
@@ -31,7 +32,6 @@ public abstract class Animatable : CoreObject, IAnimatable
         remove => Animations.Invalidated -= value;
     }
 
-    // Todo: オブジェクトを作成したものがIClockを指定する
     public virtual void ApplyAnimations(IClock clock)
     {
         foreach (IAnimation? item in Animations.GetMarshal().Value)
@@ -40,6 +40,7 @@ public abstract class Animatable : CoreObject, IAnimatable
         }
     }
 
+    [ObsoleteSerializationApi]
     public override void ReadFromJson(JsonObject json)
     {
         base.ReadFromJson(json);
@@ -60,6 +61,7 @@ public abstract class Animatable : CoreObject, IAnimatable
         }
     }
 
+    [ObsoleteSerializationApi]
     public override void WriteToJson(JsonObject json)
     {
         base.WriteToJson(json);
@@ -76,6 +78,38 @@ public abstract class Animatable : CoreObject, IAnimatable
         if (animations.Count > 0)
         {
             json["animations"] = animations;
+        }
+    }
+
+    // NOTE: 互換性のため、JsonArrayではなくJsonObjectになるようにしている
+    public override void Serialize(ICoreSerializationContext context)
+    {
+        base.Serialize(context);
+        context.SetValue(nameof(Animations), Animations.ToDictionary(x => x.Property.Name, y => y));
+    }
+
+    public override void Deserialize(ICoreSerializationContext context)
+    {
+        base.Deserialize(context);
+        Dictionary<string, IAnimation>? animations
+            = context.GetValue<Dictionary<string, IAnimation>>(nameof(Animations));
+        animations ??= context.GetValue<Dictionary<string, IAnimation>>("animations");
+
+        if (animations != null)
+        {
+            Animations.Clear();
+            Animations.EnsureCapacity(animations.Count);
+
+            Type type = GetType();
+            foreach (KeyValuePair<string, IAnimation> item in animations)
+            {
+                if (item.Value is KeyFrameAnimation { Property: null } kfAnim)
+                {
+                    kfAnim.Property = PropertyRegistry.GetRegistered(type).FirstOrDefault(x => x.Name == item.Key)!;
+                }
+
+                Animations.Add(item.Value);
+            }
         }
     }
 }

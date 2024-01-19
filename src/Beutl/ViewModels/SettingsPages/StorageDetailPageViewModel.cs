@@ -3,9 +3,12 @@
 using Beutl.Api.Objects;
 
 using Beutl.Controls.Navigation;
+using Beutl.Services;
 using Beutl.Utilities;
 using Beutl.ViewModels.Dialogs;
 using Beutl.ViewModels.ExtensionsPages;
+
+using OpenTelemetry.Trace;
 
 using Reactive.Bindings;
 
@@ -22,30 +25,45 @@ public sealed class StorageDetailPageViewModel : BasePageViewModel
     {
         _user = user;
         Type = type;
+        TypeString = StorageSettingsPageViewModel.ToDisplayName(type);
 
         Refresh.Subscribe(async () =>
         {
+            using Activity? activity = Telemetry.StartActivity("StorageDetailPage.Refresh");
+
             try
             {
                 IsBusy.Value = true;
-                await _user.RefreshAsync();
-
-                Items.Clear();
-
-                int prevCount = 0;
-                int count = 0;
-
-                do
+                using (await _user.Lock.LockAsync())
                 {
-                    Asset[] items = await user.Profile.GetAssetsAsync(count, 30);
-                    Items.AddRange(items.Where(x => StorageSettingsPageViewModel.ToKnownType(x.ContentType) == Type)
-                        .Select(x => new AssetViewModel(x, x.Size.HasValue ? StringFormats.ToHumanReadableSize(x.Size.Value) : string.Empty)));
-                    prevCount = items.Length;
-                    count += items.Length;
-                } while (prevCount == 30);
+                    activity?.AddEvent(new("Entered_AsyncLock"));
+                    await _user.RefreshAsync();
+
+                    Items.Clear();
+
+                    int prevCount = 0;
+                    int count = 0;
+
+                    activity?.AddEvent(new("Start_GetAssetFiles"));
+
+                    do
+                    {
+                        Asset[] items = await user.Profile.GetAssetsAsync(count, 30);
+
+                        Items.AddRange(items.Where(x => StorageSettingsPageViewModel.ToKnownType(x.ContentType) == Type)
+                            .Select(x => new AssetViewModel(x, x.Size.HasValue ? StringFormats.ToHumanReadableSize(x.Size.Value) : string.Empty)));
+                        prevCount = items.Length;
+                        count += items.Length;
+                    } while (prevCount == 30);
+
+                    activity?.AddEvent(new("Done_GetAssetFiles"));
+                    activity?.SetTag("Assets_Count", Items.Count);
+                }
             }
             catch (Exception ex)
             {
+                activity?.SetStatus(ActivityStatusCode.Error);
+                activity?.RecordException(ex);
                 ErrorHandle(ex);
                 _logger.Error(ex, "An unexpected error has occurred.");
             }
@@ -66,7 +84,9 @@ public sealed class StorageDetailPageViewModel : BasePageViewModel
 
     public StorageSettingsPageViewModel.KnownType Type { get; }
 
-    public AvaloniaList<AssetViewModel> Items { get; } = new();
+    public string TypeString { get; }
+
+    public AvaloniaList<AssetViewModel> Items { get; } = [];
 
     public ReactivePropertySlim<bool> IsBusy { get; } = new();
 
@@ -81,8 +101,15 @@ public sealed class StorageDetailPageViewModel : BasePageViewModel
 
     public async Task DeleteAsync(AssetViewModel asset)
     {
-        await asset.Model.DeleteAsync();
-        Items.Remove(asset);
+        using Activity? activity = Telemetry.StartActivity("StorageDetailPage.Delete");
+
+        using (await asset.Model.Lock.LockAsync())
+        {
+            activity?.AddEvent(new("Entered_AsyncLock"));
+
+            await asset.Model.DeleteAsync();
+            Items.Remove(asset);
+        }
     }
 
     public override void Dispose()

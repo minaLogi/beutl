@@ -8,102 +8,125 @@ namespace Beutl.Api.Services;
 
 public sealed class ExtensionProvider : IBeutlApiResource
 {
-    internal readonly Dictionary<int, Extension[]> _allExtensions = new();
+    private readonly Dictionary<int, Extension[]> _allExtensions = [];
     private readonly ExtensionConfig _config = GlobalConfiguration.Instance.ExtensionConfig;
-    private readonly Dictionary<Type, Array> _cache = new();
+    private readonly Dictionary<Type, Array> _cache = [];
+    private readonly CoreList<Extension> _extensions = [];
+    private readonly object _lock = new();
     private bool _cacheInvalidated;
-    private static ExtensionProvider? s_current;
 
     public ExtensionProvider()
     {
     }
 
-    public static ExtensionProvider Current
-    {
-        get => s_current!;
-        internal set => s_current ??= value;
-    }
+    public static ExtensionProvider Current { get; } = new();
 
-    public IEnumerable<Extension> AllExtensions => _allExtensions.Values.SelectMany(ext => ext);
+    public ICoreReadOnlyList<Extension> AllExtensions => _extensions;
 
     public TExtension[] GetExtensions<TExtension>()
         where TExtension : Extension
     {
-        if (_cacheInvalidated)
+        lock (_lock)
         {
-            _cache.Clear();
-            _cacheInvalidated = true;
-        }
+            if (_cacheInvalidated)
+            {
+                _cache.Clear();
+                _cacheInvalidated = false;
+            }
 
-        if (_cache.TryGetValue(typeof(TExtension), out Array? result))
-        {
-            return (TExtension[])result;
-        }
-        else
-        {
-            TExtension[] exts = AllExtensions.OfType<TExtension>().ToArray();
-            _cache[typeof(TExtension)] = exts;
-            return exts;
+            if (_cache.TryGetValue(typeof(TExtension), out Array? result))
+            {
+                return (TExtension[])result;
+            }
+            else
+            {
+                TExtension[] exts = AllExtensions.OfType<TExtension>().ToArray();
+                _cache[typeof(TExtension)] = exts;
+                return exts;
+            }
         }
     }
 
     public EditorExtension? MatchEditorExtension(string file)
     {
-        string? fileExt = Path.GetExtension(file);
-
-        if (_config.EditorExtensions.TryGetValue(fileExt, out ICoreList<TypeLazy>? list))
+        lock (_lock)
         {
-            foreach (Extension extension in AllExtensions)
-            {
-                Type extType = extension.GetType();
-                if (extension is not EditorExtension editorExtension) continue;
+            string? fileExt = Path.GetExtension(file);
 
-                foreach (TypeLazy type in list.GetMarshal().Value)
+            if (_config.EditorExtensions.TryGetValue(fileExt, out ICoreList<TypeLazy>? list))
+            {
+                foreach (Extension extension in AllExtensions)
                 {
-                    if (extType == type.Type
-                        && editorExtension.IsSupported(file))
+                    Type extType = extension.GetType();
+                    if (extension is not EditorExtension editorExtension) continue;
+
+                    foreach (TypeLazy type in list.GetMarshal().Value)
                     {
-                        return editorExtension;
+                        if (extType == type.Type
+                            && editorExtension.IsSupported(file))
+                        {
+                            return editorExtension;
+                        }
                     }
                 }
             }
-        }
 
-        foreach (Extension extension in AllExtensions)
-        {
-            if (extension is EditorExtension editorExtension &&
-                editorExtension.IsSupported(file))
+            foreach (Extension extension in AllExtensions)
             {
-                return editorExtension;
+                if (extension is EditorExtension editorExtension &&
+                    editorExtension.IsSupported(file))
+                {
+                    return editorExtension;
+                }
             }
-        }
 
-        return null;
+            return null;
+        }
     }
 
     public ProjectItemExtension? MatchProjectItemExtension(string file)
     {
-        foreach (Extension extension in AllExtensions)
+        lock (_lock)
         {
-            if (extension is ProjectItemExtension wsiExtension &&
-                wsiExtension.IsSupported(file))
+            foreach (Extension extension in AllExtensions)
             {
-                return wsiExtension;
+                if (extension is ProjectItemExtension wsiExtension &&
+                    wsiExtension.IsSupported(file))
+                {
+                    return wsiExtension;
+                }
             }
-        }
 
-        return null;
+            return null;
+        }
     }
 
     public IEnumerable<ProjectItemExtension> MatchProjectItemExtensions(string file)
     {
-        foreach (Extension extension in AllExtensions)
+        lock (_lock)
         {
-            if (extension is ProjectItemExtension wsiExtension &&
-                wsiExtension.IsSupported(file))
+            foreach (Extension extension in AllExtensions)
             {
-                yield return wsiExtension;
+                if (extension is ProjectItemExtension wsiExtension &&
+                    wsiExtension.IsSupported(file))
+                {
+                    yield return wsiExtension;
+                }
             }
+        }
+    }
+
+    public void AddExtensions(int id, Extension[] extensions)
+    {
+        lock (_lock)
+        {
+            if (!_allExtensions.TryAdd(id, extensions))
+            {
+                throw new Exception("");
+            }
+
+            _extensions.AddRange(extensions);
+            InvalidateCache();
         }
     }
 

@@ -1,8 +1,12 @@
-﻿using Beutl.Api;
+﻿using Avalonia.Threading;
+
+using Beutl.Api;
 using Beutl.Api.Objects;
 using Beutl.Api.Services;
 
 using Beutl.ViewModels.ExtensionsPages.DiscoverPages;
+
+using OpenTelemetry.Trace;
 
 using Reactive.Bindings;
 
@@ -10,7 +14,7 @@ using Serilog;
 
 namespace Beutl.ViewModels.ExtensionsPages;
 
-public sealed class DiscoverPageViewModel : BasePageViewModel
+public sealed class DiscoverPageViewModel : BasePageViewModel, ISupportRefreshViewModel
 {
     private readonly ILogger _logger = Log.ForContext<DiscoverPageViewModel>();
     private readonly BeutlApiApplication _clients;
@@ -18,25 +22,28 @@ public sealed class DiscoverPageViewModel : BasePageViewModel
 
     public DiscoverPageViewModel(BeutlApiApplication clients)
     {
-        static async Task LoadAsync(CoreList<Package> packages, Func<int, int, Task<Package[]>> func, int maxCount = int.MaxValue)
+        static async Task LoadAsync(CoreList<object> packages, Func<int, int, Task<Package[]>> func, int maxCount = int.MaxValue)
         {
-            packages.Clear();
-
             int prevCount = 0;
             int count = 0;
 
             do
             {
-                Package[] items = await func(count, 30);
+                Package[] items = await func(count, 30).ConfigureAwait(false);
+                if (count == 0)
+                {
+                    await Dispatcher.UIThread.InvokeAsync(packages.Clear);
+                }
+
                 count += items.Length;
 
                 if (maxCount < count)
                 {
-                    packages.AddRange(items.AsSpan<Package>().Slice(0, count - maxCount));
+                    await Dispatcher.UIThread.InvokeAsync(() => packages.AddRange(items.Take(count - maxCount)));
                 }
                 else
                 {
-                    packages.AddRange(items.AsSpan<Package>());
+                    await Dispatcher.UIThread.InvokeAsync(() => packages.AddRange(items));
                     prevCount = items.Length;
                 }
             } while (prevCount == 30 && maxCount > count);
@@ -47,22 +54,39 @@ public sealed class DiscoverPageViewModel : BasePageViewModel
         DataContextFactory = new DataContextFactory(_discoverService, _clients);
         Refresh.Subscribe(async () =>
         {
+            using Activity? activity = Services.Telemetry.StartActivity("DiscoverPage.Refresh");
+
             try
             {
                 IsBusy.Value = true;
-                var user = _clients.AuthorizedUser.Value;
-                if (user != null)
+                AuthorizedUser? user = _clients.AuthorizedUser.Value;
+                // placeholder
+                DummyItem[] dummy = Enumerable.Repeat(new DummyItem(), 6).ToArray();
+                foreach (CoreList<object>? item in new[] { DailyRanking, WeeklyRanking, Top10, RecentlyRanking })
                 {
-                    await user.RefreshAsync();
+                    item.Clear();
+                    item.AddRange(dummy);
                 }
 
-                await LoadAsync(DailyRanking, (start, count) => _discoverService.GetDailyRanking(start, count), 10);
-                await LoadAsync(WeeklyRanking, (start, count) => _discoverService.GetWeeklyRanking(start, count), 10);
-                await LoadAsync(Top10, (start, count) => _discoverService.GetOverallRanking(start, count), 10);
-                await LoadAsync(RecentlyRanking, (start, count) => _discoverService.GetRecentlyRanking(start, count), 10);
+                using (await _clients.Lock.LockAsync().ConfigureAwait(false))
+                {
+                    activity?.AddEvent(new("Entered_AsyncLock"));
+                    if (user != null)
+                    {
+                        await user.RefreshAsync().ConfigureAwait(false);
+                    }
+
+                    Task task0 = Task.Run(() => LoadAsync(DailyRanking, (start, count) => _discoverService.GetDailyRanking(start, count), 10));
+                    Task task1 = Task.Run(() => LoadAsync(WeeklyRanking, (start, count) => _discoverService.GetWeeklyRanking(start, count), 10));
+                    Task task2 = Task.Run(() => LoadAsync(Top10, (start, count) => _discoverService.GetOverallRanking(start, count), 10));
+                    Task task3 = Task.Run(() => LoadAsync(RecentlyRanking, (start, count) => _discoverService.GetRecentlyRanking(start, count), 10));
+                    await Task.WhenAll(task0, task1, task2, task3).ConfigureAwait(false);
+                }
             }
             catch (Exception ex)
             {
+                activity?.SetStatus(ActivityStatusCode.Error);
+                activity?.RecordException(ex);
                 ErrorHandle(ex);
                 _logger.Error(ex, "An unexpected error has occurred.");
             }
@@ -75,13 +99,13 @@ public sealed class DiscoverPageViewModel : BasePageViewModel
         Refresh.Execute();
     }
 
-    public CoreList<Package> Top10 { get; } = new();
+    public CoreList<object> Top10 { get; } = [];
 
-    public CoreList<Package> DailyRanking { get; } = new();
+    public CoreList<object> DailyRanking { get; } = [];
 
-    public CoreList<Package> WeeklyRanking { get; } = new();
+    public CoreList<object> WeeklyRanking { get; } = [];
 
-    public CoreList<Package> RecentlyRanking { get; } = new();
+    public CoreList<object> RecentlyRanking { get; } = [];
 
     public ReactivePropertySlim<bool> IsBusy { get; } = new();
 

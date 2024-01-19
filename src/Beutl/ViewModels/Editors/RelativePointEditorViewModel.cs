@@ -1,14 +1,13 @@
 ﻿using Avalonia;
 
 using Beutl.Controls.PropertyEditors;
-using Beutl.Extensibility;
 
 using Reactive.Bindings;
 using Reactive.Bindings.Extensions;
 
 namespace Beutl.ViewModels.Editors;
 
-public sealed class RelativePointEditorViewModel : ValueEditorViewModel<Graphics.RelativePoint>
+public sealed class RelativePointEditorViewModel : ValueEditorViewModel<Graphics.RelativePoint>,IConfigureUniformEditor
 {
     public RelativePointEditorViewModel(IAbstractProperty<Graphics.RelativePoint> property)
         : base(property)
@@ -32,8 +31,10 @@ public sealed class RelativePointEditorViewModel : ValueEditorViewModel<Graphics
     public ReadOnlyReactivePropertySlim<float> FirstValue { get; }
 
     public ReadOnlyReactivePropertySlim<float> SecondValue { get; }
-    
+
     public ReadOnlyReactivePropertySlim<Graphics.RelativeUnit> UnitValue { get; }
+
+    public ReactivePropertySlim<bool> IsUniformEditorEnabled { get; } = new();
 
     public override void Accept(IPropertyEditorContextVisitor visitor)
     {
@@ -43,12 +44,13 @@ public sealed class RelativePointEditorViewModel : ValueEditorViewModel<Graphics
             editor[!RelativePointEditor.FirstValueProperty] = FirstValue.ToBinding();
             editor[!RelativePointEditor.SecondValueProperty] = SecondValue.ToBinding();
             editor[!RelativePointEditor.UnitProperty] = UnitValue.ToBinding();
+            editor[!Vector2Editor.IsUniformProperty] = IsUniformEditorEnabled.ToBinding();
+            editor.ValueConfirmed += OnValueConfirmed;
             editor.ValueChanged += OnValueChanged;
-            editor.ValueChanging += OnValueChanging;
         }
     }
 
-    private void OnValueChanged(object? sender, PropertyEditorValueChangedEventArgs e)
+    private void OnValueConfirmed(object? sender, PropertyEditorValueChangedEventArgs e)
     {
         if (e is PropertyEditorValueChangedEventArgs<Graphics.RelativePoint> args)
         {
@@ -56,7 +58,7 @@ public sealed class RelativePointEditorViewModel : ValueEditorViewModel<Graphics
         }
     }
 
-    private void OnValueChanging(object? sender, PropertyEditorValueChangedEventArgs e)
+    private void OnValueChanged(object? sender, PropertyEditorValueChangedEventArgs e)
     {
         if (e is PropertyEditorValueChangedEventArgs<Graphics.RelativePoint> args
             && sender is RelativePointEditor editor)

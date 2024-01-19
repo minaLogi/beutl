@@ -1,4 +1,8 @@
+﻿using System.Globalization;
+using System.Text;
+
 using NUnit.Framework;
+using NUnit.Framework.Legacy;
 
 namespace Beutl.Graphics.UnitTests;
 
@@ -10,7 +14,7 @@ public class SizeTests
         const string str = "1920,1080";
         var size = Size.Parse(str);
 
-        Assert.AreEqual(new Size(1920, 1080), size);
+        ClassicAssert.AreEqual(new Size(1920, 1080), size);
     }
     
     [Test]
@@ -19,7 +23,57 @@ public class SizeTests
         const string str = "1920,1080";
         var size = Size.Parse(str.AsSpan());
 
-        Assert.AreEqual(new Size(1920, 1080), size);
+        ClassicAssert.AreEqual(new Size(1920, 1080), size);
+    }
+
+    [Test]
+    public void ParseWithProvider()
+    {
+        const string str = "1920;1080";
+        var size = Size.Parse(str, CultureInfo.GetCultureInfo("fr"));
+
+        ClassicAssert.AreEqual(new Size(1920, 1080), size);
+    }
+
+    [Test]
+    public void ParseUtf8()
+    {
+        ReadOnlySpan<byte> str = "1920,1080"u8;
+        var size = Size.Parse(str);
+
+        ClassicAssert.AreEqual(new Size(1920, 1080), size);
+    }
+
+    [Test]
+    public void ParseUtf8WithProvider()
+    {
+        ReadOnlySpan<byte> str = "1920;1080"u8;
+        var size = Size.Parse(str, CultureInfo.GetCultureInfo("fr"));
+
+        ClassicAssert.AreEqual(new Size(1920, 1080), size);
+    }
+
+    [Test]
+    public void FormatToSpan()
+    {
+        const string str = "1920, 1080";
+        var size = new Size(1920, 1080);
+        Span<char> s = stackalloc char[64];
+
+        size.TryFormat(s, out int written);
+        ClassicAssert.AreEqual(str, s.Slice(0, written).ToString());
+    }
+
+    [Test]
+    public void FormatToUtf8()
+    {
+        const string str = "1920, 1080";
+        var size = new Size(1920, 1080);
+        Span<byte> s = stackalloc byte[64];
+
+        size.TryFormat(s, out int written);
+
+        ClassicAssert.AreEqual(str, Encoding.UTF8.GetString(s.Slice(0, written)));
     }
 
     [Test]
@@ -30,7 +84,7 @@ public class SizeTests
 
         size = size.Deflate(thickness);
 
-        Assert.AreEqual(new Size(1900, 1050), size);
+        ClassicAssert.AreEqual(new Size(1900, 1050), size);
     }
 
     [Test]
@@ -41,6 +95,6 @@ public class SizeTests
 
         size = size.Inflate(thickness);
 
-        Assert.AreEqual(new Size(1950, 1100), size);
+        ClassicAssert.AreEqual(new Size(1950, 1100), size);
     }
 }

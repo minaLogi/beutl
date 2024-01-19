@@ -8,8 +8,8 @@ namespace Beutl.Animation;
 
 public static class AnimatorRegistry
 {
-    private static readonly List<(Func<Type, bool> Condition, Type Animator)> s_animators = new()
-    {
+    private static readonly List<(Func<Type, bool> Condition, Type Animator)> s_animators =
+    [
         (type => typeof(bool).IsAssignableFrom(type), typeof(BoolAnimator)),
         (type => typeof(byte).IsAssignableFrom(type), typeof(ByteAnimator)),
         (type => typeof(Color).IsAssignableFrom(type), typeof(ColorAnimator)),
@@ -38,38 +38,55 @@ public static class AnimatorRegistry
         (type => typeof(Vector3).IsAssignableFrom(type), typeof(Vector3Animator)),
         (type => typeof(Vector4).IsAssignableFrom(type), typeof(Vector4Animator)),
         (type => typeof(Graphics.Vector).IsAssignableFrom(type), typeof(VectorAnimator)),
-    };
+    ];
+
+    public static Animator<T> CreateAnimator<T>()
+    {
+        return (Activator.CreateInstance(GetAnimatorType(typeof(T))) as Animator<T>) ?? new _Animator<T>();
+    }
 
     public static Type GetAnimatorType(Type type)
     {
-        foreach ((Func<Type, bool> condition, Type animator) in s_animators)
+        lock (s_animators)
         {
-            if (condition(type))
+            foreach ((Func<Type, bool> condition, Type animator) in s_animators)
             {
-                return animator;
+                if (condition(type))
+                {
+                    return animator;
+                }
             }
-        }
 
-        return typeof(_Animator<>).MakeGenericType(type);
+            return typeof(_Animator<>).MakeGenericType(type);
+        }
     }
 
     public static void RegisterAnimator(Type animatorType, Func<Type, bool> condition)
     {
-        s_animators.Insert(0, (condition, animatorType));
+        lock (s_animators)
+        {
+            s_animators.Insert(0, (condition, animatorType));
+        }
     }
 
     public static void RegisterAnimator<T, TAnimator>()
         where T : struct
         where TAnimator : Animator<T>
     {
-        s_animators.Insert(0, (type => typeof(T).IsAssignableFrom(type), typeof(TAnimator)));
+        lock (s_animators)
+        {
+            s_animators.Insert(0, (type => typeof(T).IsAssignableFrom(type), typeof(TAnimator)));
+        }
     }
 
     public static void RegisterAnimator<T, TAnimator>(Func<Type, bool> condition)
         where T : struct
         where TAnimator : Animator<T>
     {
-        s_animators.Insert(0, (condition, typeof(TAnimator)));
+        lock (s_animators)
+        {
+            s_animators.Insert(0, (condition, typeof(TAnimator)));
+        }
     }
 
     private sealed class _Animator<T> : Animator<T>

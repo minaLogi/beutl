@@ -3,6 +3,7 @@ using Avalonia.Controls;
 
 using Beutl.Controls.Navigation;
 using Beutl.Pages.SettingsPages;
+using Beutl.Services;
 using Beutl.ViewModels;
 
 using FluentAvalonia.UI.Controls;
@@ -30,21 +31,21 @@ public sealed partial class SettingsPage : UserControl
         nav.BackRequested += Nav_BackRequested;
 
         nav.SelectedItem = selected;
+    }
 
-        this.GetObservable(IsVisibleProperty).Subscribe(b =>
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        if (nav.SelectedItem is NavigationViewItem selected)
         {
-            if (b)
-            {
-                if (nav.SelectedItem is NavigationViewItem selected)
-                {
-                    OnItemInvoked(selected);
-                }
-            }
-            else
-            {
-                frame.SetNavigationState("|\n0\n0");
-            }
-        });
+            OnItemInvoked(selected);
+        }
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
+        frame.SetNavigationState("|\n0\n0");
     }
 
     protected override void OnDataContextChanged(EventArgs e)
@@ -66,8 +67,8 @@ public sealed partial class SettingsPage : UserControl
 
     private static List<NavigationViewItem> GetItems()
     {
-        return new List<NavigationViewItem>()
-        {
+        return
+        [
             new NavigationViewItem()
             {
                 Content = Strings.Account,
@@ -84,6 +85,15 @@ public sealed partial class SettingsPage : UserControl
                 IconSource = new SymbolIconSource
                 {
                     Symbol = Symbol.View
+                }
+            },
+            new NavigationViewItem()
+            {
+                Content = Strings.Editor,
+                Tag = typeof(EditorSettingsPage),
+                IconSource = new SymbolIconSource
+                {
+                    Symbol = Symbol.Edit
                 }
             },
             new NavigationViewItem()
@@ -122,7 +132,7 @@ public sealed partial class SettingsPage : UserControl
                     Symbol = FluentIcons.Common.Symbol.Info
                 }
             }
-        };
+        ];
     }
 
     private void Nav_BackRequested(object? sender, NavigationViewBackRequestedEventArgs e)
@@ -148,6 +158,7 @@ public sealed partial class SettingsPage : UserControl
             {
                 "AccountSettingsPage" => settingsPage.Account,
                 "ViewSettingsPage" => settingsPage.View,
+                "EditorSettingsPage" => settingsPage.Editor,
                 "FontSettingsPage" => settingsPage.Font,
                 "ExtensionsSettingsPage" => settingsPage.ExtensionsPage,
                 "StorageSettingsPage" => settingsPage.Storage,
@@ -161,7 +172,9 @@ public sealed partial class SettingsPage : UserControl
 
     private void Frame_Navigated(object sender, NavigationEventArgs e)
     {
-        foreach (NavigationViewItem nvi in nav.MenuItems)
+        Telemetry.NavigateSettingsPage(e.SourcePageType.Name);
+
+        foreach (NavigationViewItem nvi in nav.MenuItemsSource)
         {
             if (nvi.Tag is Type tag)
             {
@@ -183,6 +196,7 @@ public sealed partial class SettingsPage : UserControl
         {
             if (pagetype == typeof(AccountSettingsPage)
                 || pagetype == typeof(ViewSettingsPage)
+                || pagetype == typeof(EditorSettingsPage)
                 || pagetype == typeof(FontSettingsPage)
                 || pagetype == typeof(ExtensionsSettingsPage)
                 || pagetype == typeof(StorageSettingsPage)
@@ -190,7 +204,11 @@ public sealed partial class SettingsPage : UserControl
             {
                 return 0;
             }
-            else if (pagetype == typeof(StorageDetailPage))
+            else if (pagetype == typeof(StorageDetailPage)
+                || pagetype == typeof(EditorExtensionPriorityPage)
+                || pagetype == typeof(DecoderPriorityPage)
+                || pagetype == typeof(TelemetrySettingsPage)
+                || pagetype == typeof(AnExtensionSettingsPage))
             {
                 return 1;
             }
@@ -206,10 +224,11 @@ public sealed partial class SettingsPage : UserControl
             {
                 "AccountSettingsPage" => 0,
                 "ViewSettingsPage" => 1,
-                "FontSettingsPage" => 2,
-                "ExtensionsSettingsPage" => 3,
-                "StorageSettingsPage" or "StorageDetailPage" => 4,
-                "InfomationPage" => 5,
+                "EditorSettingsPage" => 2,
+                "FontSettingsPage" => 3,
+                "ExtensionsSettingsPage" or "EditorExtensionPriorityPage" or "DecoderPriorityPage" or "AnExtensionSettingsPage" => 4,
+                "StorageSettingsPage" or "StorageDetailPage" => 5,
+                "InfomationPage" or "TelemetrySettingsPage" => 6,
                 _ => 0,
             };
         }
@@ -220,10 +239,15 @@ public sealed partial class SettingsPage : UserControl
             {
                 "AccountSettingsPageViewModel" => typeof(AccountSettingsPage),
                 "ViewSettingsPageViewModel" => typeof(ViewSettingsPage),
+                "EditorSettingsPageViewModel" => typeof(EditorSettingsPage),
                 "FontSettingsPageViewModel" => typeof(FontSettingsPage),
                 "ExtensionsSettingsPageViewModel" => typeof(ExtensionsSettingsPage),
+                "EditorExtensionPriorityPageViewModel" => typeof(EditorExtensionPriorityPage),
+                "DecoderPriorityPageViewModel" => typeof(DecoderPriorityPage),
                 "StorageSettingsPageViewModel" => typeof(StorageSettingsPage),
                 "StorageDetailPageViewModel" => typeof(StorageDetailPage),
+                "TelemetrySettingsPageViewModel" => typeof(TelemetrySettingsPage),
+                "AnExtensionSettingsPageViewModel" => typeof(AnExtensionSettingsPage),
                 _ => typeof(InfomationPage),
             };
         }

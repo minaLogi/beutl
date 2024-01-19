@@ -3,32 +3,28 @@
 using Beutl.Animation;
 using Beutl.Animation.Easings;
 using Beutl.Commands;
-using Beutl.Extensibility;
 using Beutl.Reactive;
 
 using Reactive.Bindings;
 
 namespace Beutl.ViewModels;
 
-public sealed class InlineAnimationLayerViewModel<T> : InlineAnimationLayerViewModel
+public sealed class InlineAnimationLayerViewModel<T>(
+    IAbstractAnimatableProperty<T> property, TimelineViewModel timeline, ElementViewModel element)
+    : InlineAnimationLayerViewModel(property, timeline, element)
 {
-    public InlineAnimationLayerViewModel(IAbstractAnimatableProperty<T> property, TimelineViewModel timeline, ElementViewModel layer)
-        : base(property, timeline, layer)
-    {
-    }
-
     public override void DropEasing(Easing easing, TimeSpan keyTime)
     {
         if (Property.Animation is KeyFrameAnimation<T> kfAnimation)
         {
-            var originalKeyTime = keyTime;
+            TimeSpan originalKeyTime = keyTime;
             keyTime = ConvertKeyTime(originalKeyTime, kfAnimation);
             Project? proj = Timeline.Scene.FindHierarchicalParent<Project>();
             int rate = proj?.GetFrameRate() ?? 30;
 
-            var threshold = TimeSpan.FromSeconds(1d / rate) * 3;
+            TimeSpan threshold = TimeSpan.FromSeconds(1d / rate) * 3;
 
-            var keyFrame = kfAnimation.KeyFrames.FirstOrDefault(v => Math.Abs(v.KeyTime.Ticks - keyTime.Ticks) <= threshold.Ticks);
+            IKeyFrame? keyFrame = kfAnimation.KeyFrames.FirstOrDefault(v => Math.Abs(v.KeyTime.Ticks - keyTime.Ticks) <= threshold.Ticks);
             if (keyFrame != null)
             {
                 new ChangePropertyCommand<Easing>(keyFrame, KeyFrame.EasingProperty, easing, keyFrame.Easing)
@@ -61,20 +57,11 @@ public sealed class InlineAnimationLayerViewModel<T> : InlineAnimationLayerViewM
         }
     }
 
-    private sealed class AddKeyFrameCommand : IRecordableCommand
+    private sealed class AddKeyFrameCommand(KeyFrames keyFrames, IKeyFrame keyFrame) : IRecordableCommand
     {
-        private readonly KeyFrames _keyFrames;
-        private readonly IKeyFrame _keyFrame;
-
-        public AddKeyFrameCommand(KeyFrames keyFrames, IKeyFrame keyFrame)
-        {
-            _keyFrames = keyFrames;
-            _keyFrame = keyFrame;
-        }
-
         public void Do()
         {
-            _keyFrames.Add(_keyFrame, out _);
+            keyFrames.Add(keyFrame, out _);
         }
 
         public void Redo()
@@ -84,37 +71,37 @@ public sealed class InlineAnimationLayerViewModel<T> : InlineAnimationLayerViewM
 
         public void Undo()
         {
-            _keyFrames.Remove(_keyFrame);
+            keyFrames.Remove(keyFrame);
         }
     }
 }
 
 public abstract class InlineAnimationLayerViewModel : IDisposable
 {
-    private readonly CompositeDisposable _disposables = new();
-    private readonly CompositeDisposable _innerDisposables = new();
+    private readonly CompositeDisposable _disposables = [];
+    private readonly CompositeDisposable _innerDisposables = [];
     private readonly ReactivePropertySlim<bool> _useGlobalClock = new(true);
     private LayerHeaderViewModel? _lastLayerHeader;
 
     protected InlineAnimationLayerViewModel(
         IAbstractAnimatableProperty property,
         TimelineViewModel timeline,
-        ElementViewModel layer)
+        ElementViewModel element)
     {
         Property = property;
         Timeline = timeline;
-        Layer = layer;
+        Element = element;
 
-        Layer.LayerHeader.Subscribe(OnLayerHeaderChanged).DisposeWith(_disposables);
+        Element.LayerHeader.Subscribe(OnLayerHeaderChanged).DisposeWith(_disposables);
 
-        LeftMargin = _useGlobalClock.Select(v => !v ? layer.BorderMargin : Observable.Return<Thickness>(default))
+        LeftMargin = _useGlobalClock.Select(v => !v ? element.BorderMargin : Observable.Return<Thickness>(default))
             .Switch()
             .ToReactiveProperty()
             .DisposeWith(_disposables);
 
         Margin = new TrackedInlineLayerTopObservable(this)
             .Select(x => new Thickness(0, x, 0, 0))
-            .CombineLatest(layer.Margin)
+            .CombineLatest(element.Margin)
             .Select(x => x.First + x.Second)
             .ToReactiveProperty()
             .DisposeWith(_disposables);
@@ -169,10 +156,12 @@ public abstract class InlineAnimationLayerViewModel : IDisposable
 
     public TimelineViewModel Timeline { get; }
 
-    // Todo: Rename to Element
-    public ElementViewModel Layer { get; }
+    public ElementViewModel Element { get; }
 
-    public CoreList<InlineKeyFrameViewModel> Items { get; } = new();
+    [Obsolete("Use Element property instead.")]
+    public ElementViewModel Layer => Element;
+
+    public CoreList<InlineKeyFrameViewModel> Items { get; } = [];
 
     public ReactiveProperty<Thickness> Margin { get; }
 
@@ -186,7 +175,7 @@ public abstract class InlineAnimationLayerViewModel : IDisposable
 
     public ReactiveCommand Close { get; }
 
-    public ReactivePropertySlim<LayerHeaderViewModel?> LayerHeader => Layer.LayerHeader;
+    public ReactivePropertySlim<LayerHeaderViewModel?> LayerHeader => Element.LayerHeader;
 
     public abstract void DropEasing(Easing easing, TimeSpan keyTime);
 
@@ -194,7 +183,7 @@ public abstract class InlineAnimationLayerViewModel : IDisposable
 
     public TimeSpan ConvertKeyTime(TimeSpan globalkeyTime, IAnimation animation)
     {
-        TimeSpan localKeyTime = globalkeyTime - Layer.Model.Start;
+        TimeSpan localKeyTime = globalkeyTime - Element.Model.Start;
         TimeSpan keyTime = animation.UseGlobalClock ? globalkeyTime : localKeyTime;
 
         int rate = Timeline.Scene?.FindHierarchicalParent<Project>() is { } proj ? proj.GetFrameRate() : 30;
@@ -281,19 +270,13 @@ public abstract class InlineAnimationLayerViewModel : IDisposable
 
     public record struct PrepareAnimationContext(Thickness Margin, Thickness LeftMargin);
 
-    private sealed class TrackedInlineLayerTopObservable : LightweightObservableBase<double>
+    private sealed class TrackedInlineLayerTopObservable(InlineAnimationLayerViewModel inline) : LightweightObservableBase<double>
     {
-        private readonly InlineAnimationLayerViewModel _inline;
         private IDisposable? _disposable1;
         private IDisposable? _disposable2;
         private IDisposable? _disposable3;
         private int _prevIndex = -1;
         private LayerHeaderViewModel? _prevLayerHeader;
-
-        public TrackedInlineLayerTopObservable(InlineAnimationLayerViewModel inline)
-        {
-            _inline = inline;
-        }
 
         protected override void Deinitialize()
         {
@@ -307,10 +290,10 @@ public abstract class InlineAnimationLayerViewModel : IDisposable
 
         protected override void Initialize()
         {
-            _disposable1 = _inline.LayerHeader
+            _disposable1 = inline.LayerHeader
                 .Subscribe(OnLayerHeaderChanged);
 
-            _disposable2 = _inline.Index.Subscribe(OnIndexChanged);
+            _disposable2 = inline.Index.Subscribe(OnIndexChanged);
         }
 
         private void OnLayerHeaderChanged(LayerHeaderViewModel? obj)
@@ -347,7 +330,7 @@ public abstract class InlineAnimationLayerViewModel : IDisposable
         {
             if (_prevLayerHeader != null)
             {
-                _prevIndex = _prevLayerHeader.Inlines.IndexOf(_inline);
+                _prevIndex = _prevLayerHeader.Inlines.IndexOf(inline);
 
                 double value = _prevLayerHeader.CalculateInlineTop(_prevIndex) + FrameNumberHelper.LayerHeight;
                 if (observer == null)

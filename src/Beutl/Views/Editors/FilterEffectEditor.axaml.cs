@@ -5,15 +5,12 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 
-using Beutl.Graphics.Effects;
 using Beutl.Services;
 using Beutl.ViewModels.Dialogs;
 using Beutl.ViewModels.Editors;
 using Beutl.Views.Dialogs;
 
 using FluentAvalonia.UI.Controls;
-
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Beutl.Views.Editors;
 
@@ -22,6 +19,7 @@ public partial class FilterEffectEditor : UserControl
     private static readonly CrossFade s_transition = new(TimeSpan.FromMilliseconds(250));
 
     private CancellationTokenSource? _lastTransitionCts;
+    private UnknownObjectView? _unknownObjectView;
 
     public FilterEffectEditor()
     {
@@ -46,6 +44,18 @@ public partial class FilterEffectEditor : UserControl
         DragDrop.SetAllowDrop(this, true);
         AddHandler(DragDrop.DragOverEvent, DragOver);
         AddHandler(DragDrop.DropEvent, Drop);
+
+        this.GetObservable(DataContextProperty)
+            .Select(x => x as FilterEffectEditorViewModel)
+            .Select(x => x?.IsDummy.Select(_ => x) ?? Observable.Return<FilterEffectEditorViewModel?>(null))
+            .Switch()
+            .Where(v => v?.IsDummy.Value == true)
+            .Take(1)
+            .Subscribe(_ =>
+            {
+                _unknownObjectView = new UnknownObjectView();
+                content.Children.Add(_unknownObjectView);
+            });
     }
 
     private void Drop(object? sender, DragEventArgs e)
@@ -72,6 +82,7 @@ public partial class FilterEffectEditor : UserControl
         if (e.Data.Contains(KnownLibraryItemFormats.FilterEffect))
         {
             e.DragEffects = DragDropEffects.Copy | DragDropEffects.Link;
+            e.Handled = true;
         }
         else
         {

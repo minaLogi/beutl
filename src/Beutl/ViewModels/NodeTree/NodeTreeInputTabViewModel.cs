@@ -1,6 +1,5 @@
 ﻿using System.Text.Json.Nodes;
 
-using Beutl.Extensibility;
 using Beutl.ProjectSystem;
 using Beutl.Services.PrimitiveImpls;
 
@@ -10,18 +9,18 @@ namespace Beutl.ViewModels.NodeTree;
 
 public sealed class NodeTreeInputTabViewModel : IToolContext
 {
-    private readonly CompositeDisposable _disposables = new();
+    private readonly CompositeDisposable _disposables = [];
     private EditViewModel _editViewModel;
 
     public NodeTreeInputTabViewModel(EditViewModel editViewModel)
     {
         _editViewModel = editViewModel;
-        Layer = editViewModel.SelectedObject
+        Element = editViewModel.SelectedObject
             .Select(x => x as Element)
             .ToReactiveProperty()
             .DisposeWith(_disposables);
 
-        Layer.CombineWithPrevious()
+        Element.CombineWithPrevious()
             .Subscribe(obj =>
             {
                 InnerViewModel.Value?.Dispose();
@@ -42,7 +41,10 @@ public sealed class NodeTreeInputTabViewModel : IToolContext
 
     public ToolTabExtension.TabPlacement Placement => ToolTabExtension.TabPlacement.Right;
 
-    public ReactiveProperty<Element?> Layer { get; }
+    public ReactiveProperty<Element?> Element { get; }
+
+    [Obsolete("Use Element property instead.")]
+    public ReactiveProperty<Element?> Layer => Element;
 
     public ReactivePropertySlim<NodeTreeInputViewModel?> InnerViewModel { get; } = new();
 
@@ -52,14 +54,14 @@ public sealed class NodeTreeInputTabViewModel : IToolContext
 
         InnerViewModel.Value?.Dispose();
         InnerViewModel.Value = null;
-        Layer.Value = null;
+        Element.Value = null;
         _editViewModel = null!;
     }
 
     public object? GetService(Type serviceType)
     {
         if (serviceType == typeof(Element))
-            return Layer.Value;
+            return Element.Value;
 
         return _editViewModel.GetService(serviceType);
     }

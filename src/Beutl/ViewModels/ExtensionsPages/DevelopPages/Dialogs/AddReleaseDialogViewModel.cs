@@ -1,7 +1,10 @@
 ﻿using Beutl.Api;
 using Beutl.Api.Objects;
+using Beutl.Services;
 
 using NuGet.Versioning;
+
+using OpenTelemetry.Trace;
 
 using Reactive.Bindings;
 
@@ -41,6 +44,7 @@ public sealed class AddReleaseDialogViewModel
 
     public async Task<Release?> AddAsync()
     {
+        using Activity? activity = Telemetry.StartActivity("AddReleaseDialog");
         try
         {
             Title.ForceValidate();
@@ -51,19 +55,26 @@ public sealed class AddReleaseDialogViewModel
                 return null;
             }
 
-            await _user.RefreshAsync();
+            using (await _user.Lock.LockAsync())
+            {
+                await _user.RefreshAsync();
 
-            var request = new CreateReleaseRequest(Body.Value, Title.Value);
-            return Result = await _package.AddReleaseAsync(Version.Value, request);
+                var request = new CreateReleaseRequest(Body.Value, "*", Title.Value);
+                return Result = await _package.AddReleaseAsync(Version.Value, request);
+            }
         }
         catch (BeutlApiException<ApiErrorResponse> e)
         {
+            activity?.SetStatus(ActivityStatusCode.Error);
+            activity?.RecordException(e);
             Error.Value = e.Result.Message;
             _logger.Error(e, "API error occurred.");
             return null;
         }
         catch (Exception e)
         {
+            activity?.SetStatus(ActivityStatusCode.Error);
+            activity?.RecordException(e);
             Error.Value = Message.AnUnexpectedErrorHasOccurred;
             _logger.Error(e, "An unexpected error has occurred.");
             return null;

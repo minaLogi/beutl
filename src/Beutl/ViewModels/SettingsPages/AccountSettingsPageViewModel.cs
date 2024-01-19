@@ -1,9 +1,10 @@
 ﻿using Beutl.Api;
 using Beutl.Api.Objects;
-
-using Beutl.Controls.Navigation;
+using Beutl.Services;
 using Beutl.ViewModels.Dialogs;
 using Beutl.ViewModels.ExtensionsPages;
+
+using OpenTelemetry.Trace;
 
 using Reactive.Bindings;
 
@@ -14,7 +15,7 @@ namespace Beutl.ViewModels.SettingsPages;
 public sealed class AccountSettingsPageViewModel : BasePageViewModel
 {
     private readonly ILogger _logger = Log.ForContext<AccountSettingsPageViewModel>();
-    private readonly CompositeDisposable _disposables = new();
+    private readonly CompositeDisposable _disposables = [];
     private readonly BeutlApiApplication _clients;
     private readonly ReactivePropertySlim<CancellationTokenSource?> _cts = new();
 
@@ -61,7 +62,7 @@ public sealed class AccountSettingsPageViewModel : BasePageViewModel
             .DisposeWith(_disposables);
 
         SignOut = new ReactiveCommand(SignedIn);
-        SignOut.Subscribe(_clients.SignOut).DisposeWith(_disposables);
+        SignOut.Subscribe(() => _clients.SignOut()).DisposeWith(_disposables);
 
         OpenAccountSettings = new();
         OpenAccountSettings.Subscribe(BeutlApiApplication.OpenAccountSettings);
@@ -69,23 +70,33 @@ public sealed class AccountSettingsPageViewModel : BasePageViewModel
         Refresh = new AsyncReactiveCommand(IsLoading.Select(x => !x));
         Refresh.Subscribe(async () =>
         {
-            try
+            using (Activity? activity = Telemetry.StartActivity("AccountSettingsPage.Refresh"))
             {
-                IsLoading.Value = true;
-                if (_clients.AuthorizedUser.Value is { } user)
+                try
                 {
-                    await user.RefreshAsync();
-                    await user.Profile.RefreshAsync();
+                    IsLoading.Value = true;
+                    if (_clients.AuthorizedUser.Value is { } user)
+                    {
+                        using (await user.Lock.LockAsync())
+                        {
+                            activity?.AddEvent(new("Entered_AsyncLock"));
+
+                            await user.RefreshAsync();
+                            await user.Profile.RefreshAsync();
+                        }
+                    }
                 }
-            }
-            catch (Exception ex)
-            {
-                ErrorHandle(ex);
-                _logger.Error(ex, "An unexpected error has occurred.");
-            }
-            finally
-            {
-                IsLoading.Value = false;
+                catch (Exception ex)
+                {
+                    activity?.SetStatus(ActivityStatusCode.Error);
+                    activity?.RecordException(ex);
+                    ErrorHandle(ex);
+                    _logger.Error(ex, "An unexpected error has occurred.");
+                }
+                finally
+                {
+                    IsLoading.Value = false;
+                }
             }
         });
     }
@@ -130,49 +141,67 @@ public sealed class AccountSettingsPageViewModel : BasePageViewModel
 
     public async Task UpdateAvatarImage(Asset asset)
     {
-        try
+        using (Activity? activity = Telemetry.StartActivity("AccountSettingsPage.UpdateAvatarImage"))
         {
-            if (_clients.AuthorizedUser.Value is { } user)
+            using (await _clients.Lock.LockAsync())
             {
-                await user.RefreshAsync();
-                await asset.UpdateAsync(true);
-                await user.Profile.UpdateAsync(avatarId: asset.Id);
+                activity?.AddEvent(new("Entered_AsyncLock"));
+
+                try
+                {
+                    if (_clients.AuthorizedUser.Value is { } user)
+                    {
+                        await user.RefreshAsync();
+
+                        await asset.UpdateAsync(true);
+                        await user.Profile.UpdateAsync(avatarId: asset.Id);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    activity?.SetStatus(ActivityStatusCode.Error);
+                    activity?.RecordException(ex);
+                    ErrorHandle(ex);
+                    _logger.Error(ex, "An unexpected error has occurred.");
+                }
             }
-        }
-        catch (Exception ex)
-        {
-            ErrorHandle(ex);
-            _logger.Error(ex, "An unexpected error has occurred.");
         }
     }
 
     private async Task SignInCore(string? provider = null)
     {
-        try
+        using (Activity? activity = Telemetry.StartActivity("AccountSettingsPage.SignInCore"))
         {
-            _cts.Value = new CancellationTokenSource();
-            AuthorizedUser? user = provider switch
+            try
             {
-                "Google" => await _clients.SignInWithGoogleAsync(_cts.Value.Token),
-                "GitHub" => await _clients.SignInWithGitHubAsync(_cts.Value.Token),
-                _ => await _clients.SignInAsync(_cts.Value.Token),
-            };
-        }
-        catch (BeutlApiException<ApiErrorResponse>)
-        {
-            // Todo: エラー説明
-            Error.Value = Message.ApiErrorOccurred;
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (Exception)
-        {
-            Error.Value = Message.AnUnexpectedErrorHasOccurred;
-        }
-        finally
-        {
-            _cts.Value = null;
+                _cts.Value = new CancellationTokenSource();
+                AuthorizedUser? user = provider switch
+                {
+                    "Google" => await _clients.SignInWithGoogleAsync(_cts.Value.Token),
+                    "GitHub" => await _clients.SignInWithGitHubAsync(_cts.Value.Token),
+                    _ => await _clients.SignInAsync(_cts.Value.Token),
+                };
+            }
+            catch (BeutlApiException<ApiErrorResponse> apiex)
+            {
+                activity?.SetStatus(ActivityStatusCode.Error);
+                activity?.RecordException(apiex);
+                // Todo: エラー説明
+                Error.Value = Message.ApiErrorOccurred;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                activity?.SetStatus(ActivityStatusCode.Error);
+                activity?.RecordException(ex);
+                Error.Value = Message.AnUnexpectedErrorHasOccurred;
+            }
+            finally
+            {
+                _cts.Value = null;
+            }
         }
     }
 }

@@ -1,11 +1,9 @@
 ﻿using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.VisualTree;
 
 using Beutl.Controls.PropertyEditors;
-using Beutl.Extensibility;
 using Beutl.NodeTree;
 using Beutl.ViewModels.NodeTree;
 
@@ -19,7 +17,7 @@ namespace Beutl.Views.NodeTree;
 
 public partial class SocketView : UserControl
 {
-    private readonly CompositeDisposable _disposables = new();
+    private readonly CompositeDisposable _disposables = [];
     private SocketPoint? _socketPt;
     private NodeView? _nodeView;
     private Canvas? _canvas;
@@ -89,7 +87,7 @@ public partial class SocketView : UserControl
         {
             new MenuItem()
             {
-                Header = "Disconnect",
+                Header = Strings.Disconnect,
                 Command = new ReactiveCommand()
                     .WithSubscribe(obj.DisconnectAll)
             }

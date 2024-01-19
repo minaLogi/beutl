@@ -26,27 +26,27 @@
             Margin="{Binding BorderMargin.Value}"
             HorizontalAlignment="Left"
             Background="{Binding Color.Value, Converter={StaticResource ColorToBrushConverter}}"
-            BorderBrush="{DynamicResource TextControlForeground}"
+            BorderThickness="1"
             Classes.selected="{Binding IsSelected.Value}">
         <Border.Styles>
             <Style Selector="Border.selected">
-                <Setter Property="BorderThickness" Value="1" />
-                <Setter Property="Padding" Value="-1" />
+                <Setter Property="BorderBrush" Value="{DynamicResource TextControlForeground}" />
+            </Style>
+            <Style Selector="Border:not(.selected)">
+                <Setter Property="BorderBrush" Value="{Binding RestBorderColor.Value, Converter={StaticResource ColorToBrushConverter}}" />
             </Style>
         </Border.Styles>
-        <Border.Resources>
-            <Thickness x:Key="MenuFlyoutItemPlaceholderThemeThickness">0,0,0,0</Thickness>
-            <Thickness x:Key="MenuFlyoutItemDoublePlaceholderThemeThickness">28,0,0,0</Thickness>
-        </Border.Resources>
         <Border.ContextFlyout>
             <ui:FAMenuFlyout>
-                <ui:MenuFlyoutItem Command="{Binding Split}"
-                                   CommandParameter="{Binding #root.GetClickedTime, Mode=OneTime}"
-                                   Text="{x:Static lang:Strings.Split}">
+                <ui:MenuFlyoutItem Command="{Binding Split}" Text="{x:Static lang:Strings.Split}">
                     <ui:MenuFlyoutItem.IconSource>
                         <icons:SymbolIconSource Symbol="SplitVertical" />
                     </ui:MenuFlyoutItem.IconSource>
                 </ui:MenuFlyoutItem>
+                <ui:MenuFlyoutItem x:Name="splitByCurrent"
+                                   Command="{Binding SplitByCurrentFrame}"
+                                   InputGesture="{DynamicResource SplitKeyGesture}"
+                                   Text="{x:Static lang:Strings.SplitByCurrentFrame}" />
                 <ui:MenuFlyoutItem Command="{Binding Cut}"
                                    InputGesture="{DynamicResource CutKeyGesture}"
                                    Text="{x:Static lang:Strings.Cut}">
@@ -82,6 +82,9 @@
                         <icons:SymbolIconSource Symbol="Rename" />
                     </ui:MenuFlyoutItem.IconSource>
                 </ui:MenuFlyoutItem>
+                <ui:MenuFlyoutItem x:Name="change2OriginalLength"
+                                   Command="{Binding ChangeToOriginalLength}"
+                                   Text="{x:Static lang:Strings.ChangeToOriginalLength}" />
                 <ui:MenuFlyoutItem Click="ChangeColor_Click" Text="{x:Static lang:Strings.ChangeColor}" />
                 <ui:MenuFlyoutSeparator />
                 <ui:MenuFlyoutSubItem Text="{x:Static lang:Strings.Animation}">

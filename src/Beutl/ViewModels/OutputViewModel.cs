@@ -1,23 +1,27 @@
 ﻿using System.Collections.ObjectModel;
+using System.Text.Json.Nodes;
 
 using Avalonia.Platform.Storage;
-using Beutl.Rendering;
+
+using Beutl.Media;
 using Beutl.Media.Encoding;
+using Beutl.Media.Music;
+using Beutl.Media.Music.Samples;
+using Beutl.Media.Pixel;
 using Beutl.ProjectSystem;
+using Beutl.Rendering;
+using Beutl.Rendering.Cache;
+using Beutl.Services;
 using Beutl.Services.PrimitiveImpls;
 using Beutl.Utilities;
 
 using DynamicData;
 
-using Reactive.Bindings;
-using Beutl.Media;
-using System.Text.Json.Nodes;
-using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
-using Beutl.Rendering.Cache;
-using Beutl.Extensibility;
+
+using Reactive.Bindings;
+
 using Serilog;
-using Beutl.Services;
 
 namespace Beutl.ViewModels;
 
@@ -166,12 +170,6 @@ public sealed class VideoOutputViewModel
 
     public JsonNode WriteToJson()
     {
-        JsonNode? options = null;
-        if (OptionsJson.Value?.ToJsonString() is string opt)
-        {
-            options = JsonNode.Parse(opt);
-        }
-
         return new JsonObject
         {
             [nameof(Width)] = Width.Value,
@@ -180,7 +178,7 @@ public sealed class VideoOutputViewModel
             [nameof(FrameRate)] = InputFrameRate.Value,
             [nameof(BitRate)] = BitRate.Value,
             [nameof(KeyFrameRate)] = KeyFrameRate.Value,
-            ["Options"] = options,
+            ["Options"] = OptionsJson.Value?.DeepClone(),
             [nameof(IsOptionsExpanded)] = IsOptionsExpanded.Value,
         };
     }
@@ -287,18 +285,12 @@ public sealed class AudioOutputViewModel
 
     public JsonNode WriteToJson()
     {
-        JsonNode? options = null;
-        if (OptionsJson.Value?.ToJsonString() is string opt)
-        {
-            options = JsonNode.Parse(opt);
-        }
-
         return new JsonObject
         {
             [nameof(SampleRate)] = SampleRate.Value,
             [nameof(Channels)] = Channels.Value,
             [nameof(BitRate)] = BitRate.Value,
-            ["Options"] = options,
+            ["Options"] = OptionsJson.Value?.DeepClone(),
             [nameof(IsOptionsExpanded)] = IsOptionsExpanded.Value,
         };
     }
@@ -469,7 +461,8 @@ public sealed class OutputViewModel : IOutputContext
                         IRenderer renderer = scene.Renderer;
                         OutputVideo(frames, frameRateD, renderer, writer);
 
-                        OutputAudio(samples, renderer, writer);
+                        IComposer composer = scene.Composer;
+                        OutputAudio(samples, composer, writer);
                     }
                     finally
                     {
@@ -484,6 +477,7 @@ public sealed class OutputViewModel : IOutputContext
         }
         catch (Exception ex)
         {
+            Telemetry.Exception(ex);
             NotificationService.ShowError(Message.An_exception_occurred_during_output, ex.Message);
             _logger.Error(ex, "An exception occurred during output.");
         }
@@ -517,10 +511,20 @@ public sealed class OutputViewModel : IOutputContext
                     break;
 
                 var ts = TimeSpan.FromSeconds(i / frameRate);
-                IRenderer.RenderResult result = renderer.RenderGraphics(ts);
+                int retry = 0;
+            Retry:
+                if (!renderer.Render(ts))
+                {
+                    if (retry > 3)
+                        throw new Exception("Renderer.RenderがFalseでした。他にこのシーンを使用していないか確認してください。");
 
-                writer.AddVideo(result.Bitmap!);
-                result.Bitmap!.Dispose();
+                    retry++;
+                    goto Retry;
+                }
+                using (Bitmap<Bgra8888> result = renderer.Snapshot())
+                {
+                    writer.AddVideo(result);
+                }
 
                 ProgressValue.Value++;
                 _progress.Value = ProgressValue.Value / ProgressMax.Value;
@@ -536,7 +540,7 @@ public sealed class OutputViewModel : IOutputContext
         }
     }
 
-    private void OutputAudio(double samples, IRenderer renderer, MediaWriter writer)
+    private void OutputAudio(double samples, IComposer composer, MediaWriter writer)
     {
         for (double i = 0; i < samples; i++)
         {
@@ -544,10 +548,11 @@ public sealed class OutputViewModel : IOutputContext
                 break;
 
             var ts = TimeSpan.FromSeconds(i);
-            IRenderer.RenderResult result = renderer.RenderAudio(ts);
 
-            writer.AddAudio(result.Audio!);
-            result.Audio!.Dispose();
+            using (Pcm<Stereo32BitFloat> result = composer.Compose(ts)!)
+            {
+                writer.AddAudio(result);
+            }
 
             ProgressValue.Value++;
             _progress.Value = ProgressValue.Value / ProgressMax.Value;
@@ -614,10 +619,14 @@ public sealed class OutputViewModel : IOutputContext
 
         if (json.TryGetPropertyValue(nameof(VideoSettings), out JsonNode? videoNode)
             && videoNode is JsonObject videoObj)
+        {
             VideoSettings.ReadFromJson(videoObj);
+        }
 
         if (json.TryGetPropertyValue(nameof(AudioSettings), out JsonNode? audioNode)
             && audioNode is JsonObject audioObj)
+        {
             AudioSettings.ReadFromJson(audioObj);
+        }
     }
 }

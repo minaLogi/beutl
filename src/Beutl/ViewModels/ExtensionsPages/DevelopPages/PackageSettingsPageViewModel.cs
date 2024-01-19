@@ -1,7 +1,11 @@
-﻿using Avalonia.Collections;
+﻿using System.Reactive.Concurrency;
+
+using Avalonia.Collections;
 
 using Beutl.Api.Objects;
 using Beutl.ViewModels.Dialogs;
+
+using OpenTelemetry.Trace;
 
 using Reactive.Bindings;
 
@@ -9,10 +13,10 @@ using Serilog;
 
 namespace Beutl.ViewModels.ExtensionsPages.DevelopPages;
 
-public sealed class PackageSettingsPageViewModel : BasePageViewModel
+public sealed class PackageSettingsPageViewModel : BasePageViewModel, ISupportRefreshViewModel
 {
     private readonly ILogger _logger = Log.ForContext<PackageSettingsPageViewModel>();
-    private readonly CompositeDisposable _disposables = new();
+    private readonly CompositeDisposable _disposables = [];
     private readonly AuthorizedUser _user;
     private readonly ReactivePropertySlim<bool> _screenshotsChange = new();
 
@@ -22,10 +26,22 @@ public sealed class PackageSettingsPageViewModel : BasePageViewModel
         Package = package;
 
         ActualLogo = package.LogoId
+            .ObserveOn(TaskPoolScheduler.Default)
             .SelectMany(async id =>
             {
-                await _user.RefreshAsync();
-                return id.HasValue ? await _user.Profile.GetAssetAsync(id.Value) : null;
+                try
+                {
+                    IsLogoLoading.Value = true;
+                    using (await _user.Lock.LockAsync())
+                    {
+                        await _user.RefreshAsync();
+                        return id.HasValue ? await _user.Profile.GetAssetAsync(id.Value) : null;
+                    }
+                }
+                finally
+                {
+                    IsLogoLoading.Value = false;
+                }
             })
             .ToReadOnlyReactivePropertySlim()
             .DisposeWith(_disposables);
@@ -43,7 +59,7 @@ public sealed class PackageSettingsPageViewModel : BasePageViewModel
             .CopyToReactiveProperty()
             .DisposeWith(_disposables);
 
-        Screenshots = new AvaloniaList<Asset>();
+        Screenshots = [];
         package.Screenshots.Subscribe(async x => await ResetScreenshots(x))
             .DisposeWith(_disposables);
 
@@ -62,18 +78,28 @@ public sealed class PackageSettingsPageViewModel : BasePageViewModel
         Save = new AsyncReactiveCommand()
             .WithSubscribe(async () =>
             {
+                using Activity? activity = Services.Telemetry.StartActivity("PackageSettingsPage.Save");
+
                 try
                 {
-                    await _user.RefreshAsync();
-                    await Package.UpdateAsync(
-                        description: Description.Value,
-                        displayName: DisplayName.Value,
-                        shortDescription: ShortDescription.Value,
-                        logoImageId: Logo.Value?.Id,
-                        screenshots: Screenshots.Select(x => x.Id).ToArray());
+                    using (await _user.Lock.LockAsync())
+                    {
+                        activity?.AddEvent(new("Entered_AsyncLock"));
+
+                        await _user.RefreshAsync();
+
+                        await Package.UpdateAsync(
+                            description: Description.Value,
+                            displayName: DisplayName.Value,
+                            shortDescription: ShortDescription.Value,
+                            logoImageId: Logo.Value?.Id,
+                            screenshots: Screenshots.Select(x => x.Id).ToArray());
+                    }
                 }
                 catch (Exception ex)
                 {
+                    activity?.SetStatus(ActivityStatusCode.Error);
+                    activity?.RecordException(ex);
                     ErrorHandle(ex);
                     _logger.Error(ex, "An unexpected error has occurred.");
                 }
@@ -94,13 +120,23 @@ public sealed class PackageSettingsPageViewModel : BasePageViewModel
         Delete = new AsyncReactiveCommand()
             .WithSubscribe(async () =>
             {
+                using Activity? activity = Services.Telemetry.StartActivity("PackageSettingsPage.Delete");
+
                 try
                 {
-                    await _user.RefreshAsync();
-                    await Package.DeleteAsync();
+                    using (await _user.Lock.LockAsync())
+                    {
+                        activity?.AddEvent(new("Entered_AsyncLock"));
+
+                        await _user.RefreshAsync();
+
+                        await Package.DeleteAsync();
+                    }
                 }
                 catch (Exception ex)
                 {
+                    activity?.SetStatus(ActivityStatusCode.Error);
+                    activity?.RecordException(ex);
                     ErrorHandle(ex);
                     _logger.Error(ex, "An unexpected error has occurred.");
                 }
@@ -108,48 +144,34 @@ public sealed class PackageSettingsPageViewModel : BasePageViewModel
             .DisposeWith(_disposables);
 
         MakePublic = new AsyncReactiveCommand()
-            .WithSubscribe(async () =>
-            {
-                try
-                {
-                    await _user.RefreshAsync();
-                    await Package.UpdateAsync(isPublic: true);
-                }
-                catch (Exception ex)
-                {
-                    ErrorHandle(ex);
-                    _logger.Error(ex, "An unexpected error has occurred.");
-                }
-            })
+            .WithSubscribe(async () => await SetVisibility(true))
             .DisposeWith(_disposables);
 
         MakePrivate = new AsyncReactiveCommand()
-            .WithSubscribe(async () =>
-            {
-                try
-                {
-                    await _user.RefreshAsync();
-                    await Package.UpdateAsync(isPublic: false);
-                }
-                catch (Exception ex)
-                {
-                    ErrorHandle(ex);
-                    _logger.Error(ex, "An unexpected error has occurred.");
-                }
-            })
+            .WithSubscribe(async () => await SetVisibility(false))
             .DisposeWith(_disposables);
 
         Refresh = new AsyncReactiveCommand()
             .WithSubscribe(async () =>
             {
+                using Activity? activity = Services.Telemetry.StartActivity("PackageSettingsPage.Refresh");
+
                 try
                 {
-                    IsBusy.Value = true;
-                    await _user.RefreshAsync();
-                    await Package.RefreshAsync();
+                    using (await _user.Lock.LockAsync())
+                    {
+                        activity?.AddEvent(new("Entered_AsyncLock"));
+
+                        IsBusy.Value = true;
+                        await _user.RefreshAsync();
+
+                        await Package.RefreshAsync();
+                    }
                 }
                 catch (Exception ex)
                 {
+                    activity?.SetStatus(ActivityStatusCode.Error);
+                    activity?.RecordException(ex);
                     ErrorHandle(ex);
                     _logger.Error(ex, "An unexpected error has occurred.");
                 }
@@ -228,6 +250,8 @@ public sealed class PackageSettingsPageViewModel : BasePageViewModel
 
     public ReactivePropertySlim<bool> IsBusy { get; } = new();
 
+    public ReactivePropertySlim<bool> IsLogoLoading { get; } = new();
+
     public AsyncReactiveCommand Refresh { get; }
 
     public ReactiveCommand<Asset> AddScreenshot { get; }
@@ -250,16 +274,43 @@ public sealed class PackageSettingsPageViewModel : BasePageViewModel
 
     private async ValueTask ResetScreenshots(IDictionary<string, string>? items)
     {
-        Screenshots.Clear();
-        if (items != null)
+        using (await _user.Lock.LockAsync())
         {
-            foreach ((string key, string _) in items)
+            Screenshots.Clear();
+            if (items != null)
             {
-                long id = long.Parse(key);
-                Screenshots.Add(await Package.Owner.GetAssetAsync(id));
+                foreach ((string key, string _) in items)
+                {
+                    long id = long.Parse(key);
+                    Screenshots.Add(await Package.Owner.GetAssetAsync(id));
+                }
+            }
+
+            _screenshotsChange.Value = false;
+        }
+    }
+
+    private async Task SetVisibility(bool isPublic)
+    {
+        using Activity? activity = Services.Telemetry.StartActivity("PackageSettingsPage.SetVisibility");
+
+        try
+        {
+            using (await _user.Lock.LockAsync())
+            {
+                activity?.AddEvent(new("Entered_AsyncLock"));
+
+                await _user.RefreshAsync();
+
+                await Package.UpdateAsync(isPublic: isPublic);
             }
         }
-
-        _screenshotsChange.Value = false;
+        catch (Exception ex)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error);
+            activity?.RecordException(ex);
+            ErrorHandle(ex);
+            _logger.Error(ex, "An unexpected error has occurred.");
+        }
     }
 }

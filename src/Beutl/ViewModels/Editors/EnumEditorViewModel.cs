@@ -4,25 +4,20 @@ using Beutl.Controls.PropertyEditors;
 
 namespace Beutl.ViewModels.Editors;
 
-public sealed class EnumEditorViewModel<T> : ValueEditorViewModel<T>
+public sealed class EnumEditorViewModel<T>(IAbstractProperty<T> property) : ValueEditorViewModel<T>(property)
     where T : struct, Enum
 {
-    public EnumEditorViewModel(IAbstractProperty<T> property)
-        : base(property)
-    {
-    }
-
     public override void Accept(IPropertyEditorContextVisitor visitor)
     {
         base.Accept(visitor);
         if (visitor is EnumEditor<T> editor)
         {
             editor[!EnumEditor<T>.SelectedValueProperty] = Value.ToBinding();
-            editor.ValueChanged += OnValueChanged;
+            editor.ValueConfirmed += OnValueConfirmed;
         }
     }
 
-    private void OnValueChanged(object? sender, PropertyEditorValueChangedEventArgs e)
+    private void OnValueConfirmed(object? sender, PropertyEditorValueChangedEventArgs e)
     {
         if (e is PropertyEditorValueChangedEventArgs<T> args)
         {

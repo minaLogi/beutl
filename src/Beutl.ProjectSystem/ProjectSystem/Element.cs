@@ -4,11 +4,13 @@ using System.Reactive.Linq;
 using System.Text.Json.Nodes;
 
 using Beutl.Animation;
+using Beutl.Collections.Pooled;
 using Beutl.Language;
 using Beutl.Media;
 using Beutl.NodeTree;
 using Beutl.Operation;
 using Beutl.Rendering;
+using Beutl.Serialization;
 
 namespace Beutl.ProjectSystem;
 
@@ -67,16 +69,16 @@ public class Element : ProjectItem
 
         IsEnabledProperty.Changed.Subscribe(args =>
         {
-            if (args.Sender is Element layer)
+            if (args.Sender is Element element)
             {
-                layer.ForceRender();
+                element.ForceRender();
             }
         });
         UseNodeProperty.Changed.Subscribe(args =>
         {
-            if (args.Sender is Element layer)
+            if (args.Sender is Element element)
             {
-                layer.ForceRender();
+                element.ForceRender();
             }
         });
     }
@@ -142,14 +144,15 @@ public class Element : ProjectItem
 
     protected override void SaveCore(string filename)
     {
-        this.JsonSave(filename);
+        this.JsonSave2(filename);
     }
 
     protected override void RestoreCore(string filename)
     {
-        this.JsonRestore(filename);
+        this.JsonRestore2(filename);
     }
 
+    [ObsoleteSerializationApi]
     public override void ReadFromJson(JsonObject json)
     {
         base.ReadFromJson(json);
@@ -167,6 +170,7 @@ public class Element : ProjectItem
         }
     }
 
+    [ObsoleteSerializationApi]
     public override void WriteToJson(JsonObject json)
     {
         base.WriteToJson(json);
@@ -180,20 +184,37 @@ public class Element : ProjectItem
         json[nameof(NodeTree)] = nodeTreeJson;
     }
 
-    public void Evaluate(IRenderer renderer)
+    public override void Serialize(ICoreSerializationContext context)
     {
-        _instanceClock.GlobalClock = renderer.Clock;
-        _instanceClock.BeginTime = Start;
-        _instanceClock.DurationTime = Length;
-        _instanceClock.CurrentTime = renderer.Clock.CurrentTime - Start;
-        _instanceClock.AudioStartTime = renderer.Clock.AudioStartTime - Start;
-        if (UseNode)
+        base.Serialize(context);
+        context.SetValue(nameof(Operation), Operation);
+        context.SetValue(nameof(NodeTree), NodeTree);
+    }
+
+    public override void Deserialize(ICoreSerializationContext context)
+    {
+        base.Deserialize(context);
+        context.Populate(nameof(Operation), Operation);
+        context.Populate(nameof(NodeTree), NodeTree);
+    }
+
+    public PooledList<Renderable> Evaluate(EvaluationTarget target, IClock clock, IRenderer renderer)
+    {
+        lock (this)
         {
-            NodeTree.Evaluate(renderer, this);
-        }
-        else
-        {
-            Operation.Evaluate(renderer, this);
+            _instanceClock.GlobalClock = clock;
+            _instanceClock.BeginTime = Start;
+            _instanceClock.DurationTime = Length;
+            _instanceClock.CurrentTime = clock.CurrentTime - Start;
+            _instanceClock.AudioStartTime = clock.AudioStartTime - Start;
+            if (UseNode)
+            {
+                return NodeTree.Evaluate(target, renderer, this);
+            }
+            else
+            {
+                return Operation.Evaluate(target, renderer, this);
+            }
         }
     }
 
@@ -306,7 +327,7 @@ public class Element : ProjectItem
             Element? beforeTmp = null;
             Element? afterTmp = null;
             Element? coverTmp = null;
-            var range = new TimeRange(start, end - start);
+            var range = TimeRange.FromRange(start, end);
 
             foreach (Element? item in scene.Children.GetMarshal().Value)
             {
@@ -324,7 +345,7 @@ public class Element : ProjectItem
                         afterTmp = item;
                     }
 
-                    if (range.Contains(item.Range))
+                    if (range.Contains(item.Range) || range == item.Range)
                     {
                         coverTmp = item;
                     }
@@ -361,7 +382,7 @@ public class Element : ProjectItem
                         afterTmp = item;
                     }
 
-                    if (range.Contains(item.Range))
+                    if (range.Contains(item.Range) || range == item.Range)
                     {
                         coverTmp = item;
                     }

@@ -4,18 +4,18 @@
     <NeutralLanguage>en</NeutralLanguage>
     <RuntimeIdentifiers>win-x64;linux-x64;osx-x64</RuntimeIdentifiers>
     <SelfContained>false</SelfContained>
+    <DefineConstants>$(DefineConstants);Beutl_ExceptionHandler</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Avalonia" />
     <PackageReference Include="Avalonia.Desktop" />
     <!--Condition below is needed to remove Avalonia.Diagnostics package from build output in Release configuration.-->
     <PackageReference Condition="'$(Configuration)' == 'Debug'" Include="Avalonia.Diagnostics" />
-    <PackageReference Include="DeviceId" />
     <PackageReference Include="FluentAvaloniaUI" />
     <PackageReference Include="ReactiveProperty" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\Beutl.Api.Generated\Beutl.Api.Generated.csproj" />
+    <Compile Include="..\Beutl.Core\BeutlEnvironment.cs" />
   </ItemGroup>
   <ItemGroup>
     <Compile Update="Properties\Resources.Designer.cs">

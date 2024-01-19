@@ -9,9 +9,9 @@
                 <local:EnumEditor EditorStyle="ListItem" Header="Property 1" />
                 <local:EnumEditor Header="Property 1" />
                 <local:EnumEditor Header="Property 2" KeyFrameCount="3" />
-                <local:EnumEditor Header="Property 2"
-                                  KeyFrameCount="3"
-                                  UseCompact="True" />
+                <local:EnumEditor EditorStyle="Compact"
+                                  Header="Property 2"
+                                  KeyFrameCount="3" />
             </StackPanel>
         </Border>
     </Design.PreviewWith>
@@ -151,6 +151,34 @@
                             </Button>
                         </Grid>
                     </Border>
+                </ControlTemplate>
+            </Setter>
+        </Style>
+
+        <Style Selector="^:settings">
+            <Setter Property="BorderBrush" Value="{DynamicResource CardStrokeColorDefaultBrush}" />
+            <Setter Property="BorderThickness" Value="{DynamicResource ButtonBorderThemeThickness}" />
+            <Setter Property="Padding" Value="12" />
+            <Setter Property="CornerRadius" Value="{StaticResource ControlCornerRadius}" />
+            <Setter Property="Margin" Value="0" />
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <OptionsDisplayItem Padding="{TemplateBinding Padding}"
+                                        BorderBrush="{TemplateBinding BorderBrush}"
+                                        BorderThickness="{TemplateBinding BorderThickness}"
+                                        Clickable="False"
+                                        CornerRadius="{TemplateBinding CornerRadius}"
+                                        Description="{TemplateBinding Description}"
+                                        Header="{TemplateBinding Header}">
+                        <OptionsDisplayItem.ActionButton>
+                            <ComboBox x:Name="PART_InnerComboBox"
+                                      Width="188"
+                                      HorizontalAlignment="Stretch"
+                                      IsEnabled="{Binding IsReadOnly, Converter={x:Static BoolConverters.Not}, RelativeSource={RelativeSource AncestorType={x:Type local:EnumEditor}}}"
+                                      ItemsSource="{Binding Items, Mode=TwoWay, RelativeSource={RelativeSource AncestorType={x:Type local:EnumEditor}}}"
+                                      SelectedIndex="{Binding SelectedIndex, Mode=TwoWay, RelativeSource={RelativeSource AncestorType={x:Type local:EnumEditor}}}" />
+                        </OptionsDisplayItem.ActionButton>
+                    </OptionsDisplayItem>
                 </ControlTemplate>
             </Setter>
         </Style>

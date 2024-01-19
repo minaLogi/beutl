@@ -1,15 +1,18 @@
-﻿using Avalonia.Media;
-using Avalonia.Media.Imaging;
+﻿using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 
 using Beutl.Audio.Platforms.OpenAL;
 using Beutl.Audio.Platforms.XAudio2;
+using Beutl.Configuration;
+using Beutl.Graphics;
+using Beutl.Graphics.Rendering;
 using Beutl.Media;
 using Beutl.Media.Music;
 using Beutl.Media.Music.Samples;
 using Beutl.Media.Pixel;
 using Beutl.ProjectSystem;
 using Beutl.Rendering;
+using Beutl.Rendering.Cache;
 using Beutl.Services;
 
 using OpenTK.Audio.OpenAL;
@@ -17,6 +20,8 @@ using OpenTK.Audio.OpenAL;
 using Reactive.Bindings;
 
 using Serilog;
+
+using SkiaSharp;
 
 using Vortice.Multimedia;
 
@@ -26,14 +31,17 @@ public sealed class PlayerViewModel : IDisposable
 {
     private static readonly TimeSpan s_second = TimeSpan.FromSeconds(1);
     private readonly ILogger _logger = Log.ForContext<PlayerViewModel>();
-    private readonly CompositeDisposable _disposables = new();
+    private readonly CompositeDisposable _disposables = [];
     private readonly ReactivePropertySlim<bool> _isEnabled;
+    private readonly EditViewModel _editViewModel;
     private CancellationTokenSource? _cts;
+    private bool _playingAndRendering;
 
-    public PlayerViewModel(Scene scene, ReactivePropertySlim<bool> isEnabled)
+    public PlayerViewModel(EditViewModel editViewModel)
     {
-        Scene = scene;
-        _isEnabled = isEnabled;
+        _editViewModel = editViewModel;
+        Scene = editViewModel.Scene;
+        _isEnabled = editViewModel.IsEnabled;
         PlayPause = new ReactiveCommand(_isEnabled)
             .WithSubscribe(() =>
             {
@@ -52,8 +60,7 @@ public sealed class PlayerViewModel : IDisposable
             .WithSubscribe(() =>
             {
                 int rate = GetFrameRate();
-
-                Scene.CurrentFrame += TimeSpan.FromSeconds(1d / rate);
+                UpdateCurrentFrame(Scene.CurrentFrame + TimeSpan.FromSeconds(1d / rate));
             })
             .DisposeWith(_disposables);
 
@@ -61,8 +68,7 @@ public sealed class PlayerViewModel : IDisposable
             .WithSubscribe(() =>
             {
                 int rate = GetFrameRate();
-
-                Scene.CurrentFrame -= TimeSpan.FromSeconds(1d / rate);
+                UpdateCurrentFrame(Scene.CurrentFrame - TimeSpan.FromSeconds(1d / rate));
             })
             .DisposeWith(_disposables);
 
@@ -114,7 +120,7 @@ public sealed class PlayerViewModel : IDisposable
 
     public Project? Project => Scene?.FindHierarchicalParent<Project>();
 
-    public ReactivePropertySlim<IImage> PreviewImage { get; } = new();
+    public ReactivePropertySlim<Avalonia.Media.IImage> PreviewImage { get; } = new();
 
     public ReactivePropertySlim<bool> IsPlaying { get; } = new();
 
@@ -132,7 +138,20 @@ public sealed class PlayerViewModel : IDisposable
 
     public ReactiveCommand End { get; }
 
+    public ReactivePropertySlim<bool> IsMoveMode { get; } = new(true);
+
+    public ReactivePropertySlim<bool> IsHandMode { get; } = new(false);
+
+    public ReactivePropertySlim<bool> IsCropMode { get; } = new(false);
+
+    public ReactivePropertySlim<Matrix> FrameMatrix { get; } = new(Matrix.Identity);
+
     public event EventHandler? PreviewInvalidated;
+
+    // View側から設定
+    public Size MaxFrameSize { get; set; }
+
+    public Rect LastSelectedRect { get; set; }
 
     public async void Play()
     {
@@ -142,28 +161,50 @@ public sealed class PlayerViewModel : IDisposable
         IRenderer renderer = Scene.Renderer;
         renderer.RenderInvalidated -= Renderer_RenderInvalidated;
 
-        IsPlaying.Value = true;
-        int rate = GetFrameRate();
-
-        PlayAudio(Scene);
-
-        TimeSpan tick = TimeSpan.FromSeconds(1d / rate);
-        TimeSpan curFrame = Scene.CurrentFrame;
-        TimeSpan duration = Scene.Duration;
-
-        using (var timer = new PeriodicTimer(tick))
+        try
         {
-            DateTime dateTime = DateTime.UtcNow;
-            while (await timer.WaitForNextTickAsync()
-                && curFrame <= duration
-                && IsPlaying.Value)
-            {
-                curFrame += tick;
-                Render(renderer, curFrame);
-            }
-        }
+            IsPlaying.Value = true;
+            int rate = GetFrameRate();
 
-        renderer.RenderInvalidated += Renderer_RenderInvalidated;
+            PlayAudio(Scene);
+
+            TimeSpan tick = TimeSpan.FromSeconds(1d / rate);
+            TimeSpan startFrame = Scene.CurrentFrame;
+            DateTime startTime = DateTime.Now;
+            TimeSpan duration = Scene.Duration;
+            var tcs = new TaskCompletionSource();
+            using var timer = new System.Timers.Timer(tick);
+
+            timer.Elapsed += (_, e) =>
+            {
+                TimeSpan time = (e.SignalTime - startTime) + startFrame;
+                time = time.RoundToRate(rate);
+
+                if (time >= duration || !IsPlaying.Value)
+                {
+                    timer.Stop();
+                    tcs.SetResult();
+                }
+                else
+                {
+                    Render(renderer, time);
+                }
+            };
+            timer.Start();
+
+            await tcs.Task;
+            IsPlaying.Value = false;
+        }
+        catch (Exception ex)
+        {
+            // 本来ここには例外が来ないはず
+            Telemetry.Exception(ex);
+            _logger.Error(ex, "An exception occurred during the playback process.");
+        }
+        finally
+        {
+            renderer.RenderInvalidated += Renderer_RenderInvalidated;
+        }
     }
 
     private int GetFrameRate()
@@ -191,9 +232,9 @@ public sealed class PlayerViewModel : IDisposable
         }
     }
 
-    private static Pcm<Stereo32BitFloat>? FillAudioData(TimeSpan f, IRenderer renderer)
+    private static Pcm<Stereo32BitFloat>? FillAudioData(TimeSpan f, IComposer composer)
     {
-        if (renderer.RenderAudio(f).Audio is { } pcm)
+        if (composer.Compose(f) is { } pcm)
         {
             return pcm;
         }
@@ -205,15 +246,13 @@ public sealed class PlayerViewModel : IDisposable
 
     private static void Swap<T>(ref T x, ref T y)
     {
-        T temp = x;
-        x = y;
-        y = temp;
+        (y, x) = (x, y);
     }
 
     private async Task PlayWithXA2(XAudioContext audioContext, Scene scene)
     {
-        IRenderer renderer = scene.Renderer;
-        int sampleRate = renderer.SampleRate;
+        IComposer composer = scene.Composer;
+        int sampleRate = composer.SampleRate;
         TimeSpan cur = scene.CurrentFrame;
         var fmt = new WaveFormat(sampleRate, 32, 2);
         var source = new XAudioSource(audioContext);
@@ -222,13 +261,16 @@ public sealed class PlayerViewModel : IDisposable
 
         void PrepareBuffer(XAudioBuffer buffer)
         {
-            Pcm<Stereo32BitFloat>? pcm = FillAudioData(cur, renderer);
+            Pcm<Stereo32BitFloat>? pcm = FillAudioData(cur, composer);
             if (pcm != null)
             {
                 buffer.BufferData(pcm.DataSpan, fmt);
             }
             source.QueueBuffer(buffer);
         }
+
+        IDisposable revoker = IsPlaying.Where(v => !v)
+            .Subscribe(_ => source.Stop());
 
         try
         {
@@ -263,12 +305,14 @@ public sealed class PlayerViewModel : IDisposable
         }
         catch (Exception ex)
         {
+            Telemetry.Exception(ex);
             NotificationService.ShowError(Message.AnUnexpectedErrorHasOccurred, Message.An_exception_occurred_during_audio_playback);
             _logger.Error(ex, "An exception occurred during audio playback.");
             IsPlaying.Value = false;
         }
         finally
         {
+            revoker.Dispose();
             source.Dispose();
             primaryBuffer.Dispose();
             secondaryBuffer.Dispose();
@@ -281,18 +325,18 @@ public sealed class PlayerViewModel : IDisposable
         {
             audioContext.MakeCurrent();
 
-            IRenderer renderer = scene.Renderer;
+            IComposer composer = scene.Composer;
             TimeSpan cur = scene.CurrentFrame;
-            var buffers = AL.GenBuffers(2);
-            var source = AL.GenSource();
+            int[] buffers = AL.GenBuffers(2);
+            int source = AL.GenSource();
 
-            foreach (var buffer in buffers)
+            foreach (int buffer in buffers)
             {
-                using var pcmf = FillAudioData(cur, renderer);
+                using Pcm<Stereo32BitFloat>? pcmf = FillAudioData(cur, composer);
                 cur += s_second;
                 if (pcmf != null)
                 {
-                    using var pcm = pcmf.Convert<Stereo16BitInteger>();
+                    using Pcm<Stereo16BitInteger> pcm = pcmf.Convert<Stereo16BitInteger>();
 
                     AL.BufferData<Stereo16BitInteger>(buffer, ALFormat.Stereo16, pcm.DataSpan, pcm.SampleRate);
                 }
@@ -304,15 +348,15 @@ public sealed class PlayerViewModel : IDisposable
 
             while (IsPlaying.Value)
             {
-                AL.GetSource(source, ALGetSourcei.BuffersProcessed, out var processed);
+                AL.GetSource(source, ALGetSourcei.BuffersProcessed, out int processed);
                 while (processed > 0)
                 {
-                    using Pcm<Stereo32BitFloat>? pcmf = FillAudioData(cur, renderer);
+                    using Pcm<Stereo32BitFloat>? pcmf = FillAudioData(cur, composer);
                     cur += s_second;
                     int buffer = AL.SourceUnqueueBuffer(source);
                     if (pcmf != null)
                     {
-                        using var pcm = pcmf.Convert<Stereo16BitInteger>();
+                        using Pcm<Stereo16BitInteger> pcm = pcmf.Convert<Stereo16BitInteger>();
 
                         AL.BufferData<Stereo16BitInteger>(buffer, ALFormat.Stereo16, pcm.DataSpan, pcm.SampleRate);
                     }
@@ -336,6 +380,7 @@ public sealed class PlayerViewModel : IDisposable
         }
         catch (Exception ex)
         {
+            Telemetry.Exception(ex);
             NotificationService.ShowError(Message.AnUnexpectedErrorHasOccurred, Message.An_exception_occurred_during_audio_playback);
             _logger.Error(ex, "An exception occurred during audio playback.");
             IsPlaying.Value = false;
@@ -349,17 +394,18 @@ public sealed class PlayerViewModel : IDisposable
 
     private void Render(IRenderer renderer, TimeSpan timeSpan)
     {
-        if (renderer.IsGraphicsRendering)
+        if (_playingAndRendering)
             return;
+        _playingAndRendering = true;
 
         RenderThread.Dispatcher.Dispatch(() =>
         {
             try
             {
-                if (IsPlaying.Value && renderer.RenderGraphics(timeSpan).Bitmap is { } bitmap)
+                if (IsPlaying.Value && renderer.Render(timeSpan))
                 {
+                    using Bitmap<Bgra8888> bitmap = renderer.Snapshot();
                     UpdateImage(bitmap);
-                    bitmap.Dispose();
 
                     if (Scene != null)
                         Scene.CurrentFrame = timeSpan;
@@ -367,9 +413,14 @@ public sealed class PlayerViewModel : IDisposable
             }
             catch (Exception ex)
             {
+                Telemetry.Exception(ex);
                 NotificationService.ShowError(Message.AnUnexpectedErrorHasOccurred, Message.An_exception_occurred_while_drawing_frame);
                 _logger.Error(ex, "An exception occurred while drawing the frame.");
                 IsPlaying.Value = false;
+            }
+            finally
+            {
+                _playingAndRendering = false;
             }
         });
     }
@@ -402,6 +453,37 @@ public sealed class PlayerViewModel : IDisposable
         PreviewInvalidated?.Invoke(this, EventArgs.Empty);
     }
 
+    private void DrawBoundaries(Renderer renderer)
+    {
+        int? selected = _editViewModel.SelectedLayerNumber.Value;
+        if (selected.HasValue)
+        {
+            var frameSize = new Size(renderer.FrameSize.Width, renderer.FrameSize.Height);
+            float scale = (float)Stretch.Uniform.CalculateScaling(MaxFrameSize, frameSize, StretchDirection.Both).X;
+            if (scale == 0)
+                scale = 1;
+
+            ImmediateCanvas canvas = Renderer.GetInternalCanvas(renderer);
+            Rect[] boundary = renderer.RenderScene[selected.Value].GetBoundaries();
+            if (boundary.Length > 0)
+            {
+                var pen = new Media.Immutable.ImmutablePen(Media.Brushes.White, null, 0, 1 / scale);
+                bool exactBounds = GlobalConfiguration.Instance.ViewConfig.ShowExactBoundaries;
+
+                foreach (Rect item in renderer.RenderScene[selected.Value].GetBoundaries())
+                {
+                    Rect rect = item;
+                    if (!exactBounds)
+                    {
+                        rect = item.Inflate(4 / scale);
+                    }
+
+                    canvas.DrawRectangle(rect, null, pen);
+                }
+            }
+        }
+    }
+
     private void Renderer_RenderInvalidated(object? sender, TimeSpan e)
     {
         void RenderOnRenderThread()
@@ -410,19 +492,18 @@ public sealed class PlayerViewModel : IDisposable
             {
                 try
                 {
-                    if (Scene is { Renderer: IRenderer renderer })
+                    if (Scene is { Renderer: Renderer renderer }
+                        && renderer.Render(Scene.CurrentFrame))
                     {
-                        IRenderer.RenderResult result = renderer.RenderGraphics(Scene.CurrentFrame);
+                        DrawBoundaries(renderer);
 
-                        if (result.Bitmap is { } bitmap)
-                        {
-                            UpdateImage(bitmap);
-                            bitmap.Dispose();
-                        }
+                        using Media.Bitmap<Bgra8888> bitmap = renderer.Snapshot();
+                        UpdateImage(bitmap);
                     }
                 }
                 catch (Exception ex)
                 {
+                    Telemetry.Exception(ex);
                     NotificationService.ShowError(Message.AnUnexpectedErrorHasOccurred, Message.An_exception_occurred_while_drawing_frame);
                     _logger.Error(ex, "An exception occurred while drawing the frame.");
                 }
@@ -443,8 +524,16 @@ public sealed class PlayerViewModel : IDisposable
         if (Scene == null) return;
         if (Scene.CurrentFrame != timeSpan)
         {
-            int rate = Project?.GetFrameRate() ?? 30;
-            Scene.CurrentFrame = timeSpan.RoundToRate(rate);
+            int rate = Project.GetFrameRate();
+            timeSpan = timeSpan.RoundToRate(rate);
+
+            if (timeSpan >= Scene.Duration)
+            {
+                timeSpan = Scene.Duration - TimeSpan.FromSeconds(1d / rate);
+                timeSpan = timeSpan.RoundToRate(rate);
+            }
+
+            Scene.CurrentFrame = timeSpan;
         }
     }
 
@@ -454,5 +543,101 @@ public sealed class PlayerViewModel : IDisposable
         _disposables.Dispose();
         PreviewInvalidated = null;
         Scene = null!;
+    }
+
+    public async Task<Rect> StartSelectRect()
+    {
+        TcsForCrop = new TaskCompletionSource<Rect>();
+        IsCropMode.Value = true;
+        Rect r = await TcsForCrop.Task;
+        TcsForCrop = null;
+        return r;
+    }
+
+    public TaskCompletionSource<Rect>? TcsForCrop { get; private set; }
+
+    public Task<Bitmap<Bgra8888>> DrawSelectedDrawable(Drawable drawable)
+    {
+        Pause();
+
+        return RenderThread.Dispatcher.InvokeAsync(() =>
+        {
+            if (Scene == null) throw new Exception("Scene is null.");
+            IRenderer renderer = Scene.Renderer;
+            PixelSize frameSize = renderer.FrameSize;
+            using var root = new DrawableNode(drawable);
+            using var dcanvas = new DeferradCanvas(root, frameSize);
+            drawable.Render(dcanvas);
+
+            Rect bounds = root.Bounds;
+            var rect = PixelRect.FromRect(bounds);
+            using SKSurface? surface = renderer.CreateRenderTarget(rect.Width, rect.Height)
+                ?? throw new Exception("surface is null");
+
+            using ImmediateCanvas icanvas = renderer.CreateCanvas(surface, true);
+
+            RenderCacheContext? cacheContext = renderer.GetCacheContext();
+            RenderCacheOptions? restoreCacheOptions = null;
+
+            if (cacheContext != null)
+            {
+                restoreCacheOptions = cacheContext.CacheOptions;
+                cacheContext.CacheOptions = RenderCacheOptions.Disabled;
+            }
+
+            try
+            {
+                using (icanvas.PushTransform(Matrix.CreateTranslation(-bounds.X, -bounds.Y)))
+                {
+                    icanvas.DrawNode(root);
+                }
+
+                return icanvas.GetBitmap();
+            }
+            finally
+            {
+                if (cacheContext != null && restoreCacheOptions != null)
+                {
+                    cacheContext.CacheOptions = restoreCacheOptions;
+                }
+            }
+        });
+    }
+
+    public Task<Bitmap<Bgra8888>> DrawFrame()
+    {
+        Pause();
+
+        return RenderThread.Dispatcher.InvokeAsync(() =>
+        {
+            if (Scene == null) throw new Exception("Scene is null.");
+            IRenderer renderer = Scene.Renderer;
+
+            RenderCacheContext? cacheContext = renderer.GetCacheContext();
+            RenderCacheOptions? restoreCacheOptions = null;
+
+            if (cacheContext != null)
+            {
+                restoreCacheOptions = cacheContext.CacheOptions;
+                cacheContext.CacheOptions = RenderCacheOptions.Disabled;
+            }
+
+            try
+            {
+                if (!renderer.Render(CurrentFrame.Value))
+                {
+                    throw new Exception("Failed to render.");
+                }
+
+                return renderer.Snapshot();
+            }
+            finally
+            {
+                if (cacheContext != null && restoreCacheOptions != null)
+                {
+                    cacheContext.CacheOptions = restoreCacheOptions;
+                }
+            }
+        });
     }
 }

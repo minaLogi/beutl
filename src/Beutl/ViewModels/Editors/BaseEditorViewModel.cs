@@ -19,11 +19,11 @@ namespace Beutl.ViewModels.Editors;
 
 public abstract class BaseEditorViewModel : IPropertyEditorContext, IServiceProvider
 {
-    protected CompositeDisposable Disposables = new();
+    protected CompositeDisposable Disposables = [];
     private bool _disposedValue;
     private IDisposable? _currentFrameRevoker;
     private bool _skipKeyFrameIndexSubscription;
-    private Element? _layer;
+    private Element? _element;
     private EditViewModel? _editViewModel;
     private IServiceProvider? _parentServices;
 
@@ -75,17 +75,17 @@ public abstract class BaseEditorViewModel : IPropertyEditorContext, IServiceProv
                 {
                     if (GetAnimation() is { } animation)
                     {
-                        (int oldIndex, _) = t.OldValue;
-                        (int newIndex, KeyFrames? keyframes) = t.NewValue;
+                        (float oldIndex, _) = t.OldValue;
+                        (float newIndex, KeyFrames? keyframes) = t.NewValue;
 
-                        if (_editViewModel != null && keyframes != null
-                            && 0 <= newIndex && newIndex < keyframes.Count)
+                        if (_editViewModel != null && keyframes != null)
                         {
-                            EditingKeyFrame.Value = keyframes[newIndex];
+                            int newCeiled = (int)Math.Clamp(MathF.Ceiling(newIndex), 0, keyframes.Count - 1);
+                            EditingKeyFrame.Value = keyframes[newCeiled];
 
                             if (!_skipKeyFrameIndexSubscription && newIndex != oldIndex)
                             {
-                                TimeSpan start = _layer?.Start ?? default;
+                                TimeSpan start = _element?.Start ?? default;
                                 TimeSpan keyTime = EditingKeyFrame.Value.KeyTime;
                                 TimeSpan globalKeyTime = animation.UseGlobalClock ? keyTime : keyTime + start;
 
@@ -98,6 +98,10 @@ public abstract class BaseEditorViewModel : IPropertyEditorContext, IServiceProv
                         }
 
                         _skipKeyFrameIndexSubscription = false;
+                    }
+                    else
+                    {
+                        EditingKeyFrame.Value = null;
                     }
                 })
                 .DisposeWith(Disposables);
@@ -132,7 +136,7 @@ public abstract class BaseEditorViewModel : IPropertyEditorContext, IServiceProv
 
     public ReadOnlyReactivePropertySlim<int> KeyFrameCount { get; }
 
-    public ReactivePropertySlim<int> KeyFrameIndex { get; } = new();
+    public ReactivePropertySlim<float> KeyFrameIndex { get; } = new();
 
     public bool IsAnimatable => WrappedProperty is IAbstractAnimatableProperty;
 
@@ -172,7 +176,7 @@ public abstract class BaseEditorViewModel : IPropertyEditorContext, IServiceProv
         if (visitor is IServiceProvider serviceProvider)
         {
             _parentServices = serviceProvider;
-            _layer = serviceProvider.GetService<Element>();
+            _element = serviceProvider.GetService<Element>();
             _editViewModel = serviceProvider.GetService<EditViewModel>();
 
             if (_editViewModel != null)
@@ -195,17 +199,20 @@ public abstract class BaseEditorViewModel : IPropertyEditorContext, IServiceProv
                         {
                             if (GetAnimation() is { } animation)
                             {
-                                int rate = _editViewModel?.Scene?.FindHierarchicalParent<Project>() is { } proj ? proj.GetFrameRate() : 30;
+                                int rate = _editViewModel?.Scene?.FindHierarchicalParent<Project>().GetFrameRate() ?? 30;
 
                                 TimeSpan globalkeyTime = t.First;
-                                TimeSpan localKeyTime = _layer != null ? globalkeyTime - _layer.Start : globalkeyTime;
+                                TimeSpan localKeyTime = _element != null ? globalkeyTime - _element.Start : globalkeyTime;
                                 TimeSpan keyTime = animation.UseGlobalClock ? globalkeyTime : localKeyTime;
                                 keyTime = keyTime.RoundToRate(rate);
 
                                 IsSymbolIconFilled.Value = t.Second?.Any(obj => obj.KeyTime == keyTime) ?? false;
                                 if (t.Second != null)
                                 {
-                                    int kfIndex = t.Second.IndexAt(keyTime);
+                                    float kfIndex = t.Second.IndexAtOrCount(keyTime);
+                                    if (!IsSymbolIconFilled.Value)
+                                        kfIndex -= 0.5f;
+
                                     _skipKeyFrameIndexSubscription = KeyFrameIndex.Value != kfIndex;
                                     KeyFrameIndex.Value = kfIndex;
                                 }
@@ -238,7 +245,7 @@ public abstract class BaseEditorViewModel : IPropertyEditorContext, IServiceProv
         _currentFrameRevoker = null;
         _editViewModel = null!;
         _parentServices = null;
-        _layer = null;
+        _element = null;
         WrappedProperty = null!;
     }
 
@@ -247,6 +254,14 @@ public abstract class BaseEditorViewModel : IPropertyEditorContext, IServiceProv
     }
 
     public virtual void RemoveKeyFrame(TimeSpan keyTime)
+    {
+    }
+
+    public virtual void PrepareToEditAnimation()
+    {
+    }
+
+    public virtual void RemoveAnimation()
     {
     }
 
@@ -313,8 +328,8 @@ public abstract class BaseEditorViewModel<T> : BaseEditorViewModel
 
     private TimeSpan ConvertKeyTime(TimeSpan globalkeyTime, IAnimation animation)
     {
-        Element? layer = this.GetService<Element>();
-        TimeSpan localKeyTime = layer != null ? globalkeyTime - layer.Start : globalkeyTime;
+        Element? element = this.GetService<Element>();
+        TimeSpan localKeyTime = element != null ? globalkeyTime - element.Start : globalkeyTime;
         TimeSpan keyTime = animation.UseGlobalClock ? globalkeyTime : localKeyTime;
 
         int rate = this.GetService<EditViewModel>()?.Scene?.FindHierarchicalParent<Project>() is { } proj ? proj.GetFrameRate() : 30;
@@ -368,78 +383,31 @@ public abstract class BaseEditorViewModel<T> : BaseEditorViewModel
         }
     }
 
-    private sealed class SetCommand : IRecordableCommand
+    public override void PrepareToEditAnimation()
     {
-        private readonly IAbstractProperty<T> _setter;
-        private readonly T? _oldValue;
-        private readonly T? _newValue;
-
-        public SetCommand(IAbstractProperty<T> setter, T? oldValue, T? newValue)
+        if (WrappedProperty is IAbstractAnimatableProperty<T> animatableProperty
+            && animatableProperty.Animation is not KeyFrameAnimation<T>
+            && animatableProperty.GetCoreProperty() is CoreProperty<T> coreProperty)
         {
-            _setter = setter;
-            _oldValue = oldValue;
-            _newValue = newValue;
-        }
-
-        public void Do()
-        {
-            _setter.SetValue(_newValue);
-        }
-
-        public void Redo()
-        {
-            Do();
-        }
-
-        public void Undo()
-        {
-            _setter.SetValue(_oldValue);
+            var command = new PrepareAnimationCommand(animatableProperty, coreProperty);
+            command.DoAndRecord(CommandRecorder.Default);
         }
     }
 
-    private sealed class SetKeyFrameValueCommand : IRecordableCommand
+    public override void RemoveAnimation()
     {
-        private readonly KeyFrame<T> _keyframe;
-        private readonly T? _oldValue;
-        private readonly T? _newValue;
-
-        public SetKeyFrameValueCommand(KeyFrame<T> setter, T? oldValue, T? newValue)
+        if (WrappedProperty is IAbstractAnimatableProperty<T> animatableProperty)
         {
-            _keyframe = setter;
-            _oldValue = oldValue;
-            _newValue = newValue;
-        }
-
-        public void Do()
-        {
-            _keyframe.SetValue(KeyFrame<T>.ValueProperty, _newValue);
-        }
-
-        public void Redo()
-        {
-            Do();
-        }
-
-        public void Undo()
-        {
-            _keyframe.SetValue(KeyFrame<T>.ValueProperty, _oldValue);
+            var command = new RemoveAnimationCommand(animatableProperty);
+            command.DoAndRecord(CommandRecorder.Default);
         }
     }
 
-    private sealed class AddKeyFrameCommand : IRecordableCommand
+    private sealed class SetCommand(IAbstractProperty<T> setter, T? oldValue, T? newValue) : IRecordableCommand
     {
-        private readonly KeyFrames _keyFrames;
-        private readonly IKeyFrame _keyFrame;
-
-        public AddKeyFrameCommand(KeyFrames keyFrames, IKeyFrame keyFrame)
-        {
-            _keyFrames = keyFrames;
-            _keyFrame = keyFrame;
-        }
-
         public void Do()
         {
-            _keyFrames.Add(_keyFrame, out _);
+            setter.SetValue(newValue);
         }
 
         public void Redo()
@@ -449,7 +417,106 @@ public abstract class BaseEditorViewModel<T> : BaseEditorViewModel
 
         public void Undo()
         {
-            _keyFrames.Remove(_keyFrame);
+            setter.SetValue(oldValue);
+        }
+    }
+
+    private sealed class SetKeyFrameValueCommand(KeyFrame<T> setter, T? oldValue, T? newValue) : IRecordableCommand
+    {
+        public void Do()
+        {
+            setter.SetValue(KeyFrame<T>.ValueProperty, newValue);
+        }
+
+        public void Redo()
+        {
+            Do();
+        }
+
+        public void Undo()
+        {
+            setter.SetValue(KeyFrame<T>.ValueProperty, oldValue);
+        }
+    }
+
+    private sealed class AddKeyFrameCommand(KeyFrames keyFrames, IKeyFrame keyFrame) : IRecordableCommand
+    {
+        public void Do()
+        {
+            keyFrames.Add(keyFrame, out _);
+        }
+
+        public void Redo()
+        {
+            Do();
+        }
+
+        public void Undo()
+        {
+            keyFrames.Remove(keyFrame);
+        }
+    }
+
+    private sealed class PrepareAnimationCommand : IRecordableCommand
+    {
+        private readonly IAbstractAnimatableProperty<T> _property;
+        private readonly IAnimation<T>? _oldAnimation;
+        private readonly KeyFrameAnimation<T>? _newAnimation;
+
+        public PrepareAnimationCommand(IAbstractAnimatableProperty<T> property, CoreProperty<T> coreProperty)
+        {
+            _property = property;
+            _oldAnimation = _property.Animation;
+            _newAnimation = new KeyFrameAnimation<T>(coreProperty);
+            T initialValue = property.GetValue()!;
+            _newAnimation.KeyFrames.Add(new KeyFrame<T>
+            {
+                Value = initialValue,
+                Easing = new SplineEasing(),
+                KeyTime = TimeSpan.Zero
+            });
+        }
+
+        public void Do()
+        {
+            _property.Animation = _newAnimation;
+        }
+
+        public void Redo()
+        {
+            Do();
+        }
+
+        public void Undo()
+        {
+            _property.Animation = _oldAnimation;
+        }
+    }
+
+    private sealed class RemoveAnimationCommand : IRecordableCommand
+    {
+        private readonly IAbstractAnimatableProperty<T> _property;
+        private readonly IAnimation<T>? _oldAnimation;
+
+        public RemoveAnimationCommand(IAbstractAnimatableProperty<T> property)
+        {
+            _property = property;
+            _oldAnimation = _property.Animation;
+        }
+
+        public void Do()
+        {
+            _property.Animation = null;
+        }
+
+        public void Redo()
+        {
+            Do();
+        }
+
+        public void Undo()
+        {
+            _property.Animation = _oldAnimation;
         }
     }
 }

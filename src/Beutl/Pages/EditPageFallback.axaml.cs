@@ -6,10 +6,13 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Styling;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 
 using Beutl.Configuration;
+using Beutl.Helpers;
 using Beutl.Models;
+using Beutl.Services;
 using Beutl.ViewModels;
 using Beutl.Views;
 
@@ -19,6 +22,8 @@ using DynamicData.Binding;
 
 using FluentAvalonia.Styling;
 using FluentAvalonia.UI.Controls;
+
+using Serilog;
 
 namespace Beutl.Pages;
 
@@ -70,22 +75,22 @@ public partial class EditPageFallback : UserControl
 
     private void CreateNewProject_Click(object? sender, RoutedEventArgs e)
     {
-        ExecuteMainViewModelCommand(vm => vm.CreateNewProject.Execute());
+        ExecuteMainViewModelCommand(vm => vm.MenuBar.CreateNewProject.Execute());
     }
 
     private void CreateNewScene_Click(object? sender, RoutedEventArgs e)
     {
-        ExecuteMainViewModelCommand(vm => vm.CreateNew.Execute());
+        ExecuteMainViewModelCommand(vm => vm.MenuBar.CreateNew.Execute());
     }
 
     private void OpenProject_Click(object? sender, RoutedEventArgs e)
     {
-        ExecuteMainViewModelCommand(vm => vm.OpenProject.Execute());
+        ExecuteMainViewModelCommand(vm => vm.MenuBar.OpenProject.Execute());
     }
 
     private void OpenFile_Click(object? sender, RoutedEventArgs e)
     {
-        ExecuteMainViewModelCommand(vm => vm.OpenFile.Execute());
+        ExecuteMainViewModelCommand(vm => vm.MenuBar.OpenFile.Execute());
     }
 
     private void ExecuteMainViewModelCommand(Action<MainViewModel> action)
@@ -136,17 +141,50 @@ public partial class EditPageFallback : UserControl
         }
     }
 
+    private static IDisposable ShowWaitDialog(string projectFile)
+    {
+        return OutProcessDialog.Show(
+            title: Message.OpeningProject,
+            subtitle: Message.PleaseWaitAMoment,
+            content: string.Format(Message.OpeningProjectMessage, Path.GetFileName(projectFile)),
+            icon: "Info",
+            progress: true);
+    }
+
     private void OpenRecentFile(string fileName)
     {
         ExecuteMainViewModelCommand(viewModel =>
         {
-            if (fileName.EndsWith($".{Constants.ProjectFileExtension}"))
+            using Activity? activity = Telemetry.StartActivity("EditPageFallback.OpenRecentFile");
+
+            ITimer? timer = null;
+            IDisposable? closeDialog = null;
+            timer = TimeProvider.System.CreateTimer(_ =>
             {
-                viewModel.OpenRecentProject.Execute(fileName);
+                closeDialog = ShowWaitDialog(fileName);
+                activity?.AddEvent(new("WaitDialogShown"));
+                timer?.Dispose();
+            }, null, TimeSpan.Zero, TimeSpan.FromSeconds(3));
+
+            try
+            {
+                if (fileName.EndsWith($".{Constants.ProjectFileExtension}"))
+                {
+                    viewModel.MenuBar.OpenRecentProject.Execute(fileName);
+                }
+                else
+                {
+                    viewModel.MenuBar.OpenRecentFile.Execute(fileName);
+                }
             }
-            else
+            finally
             {
-                viewModel.OpenRecentFile.Execute(fileName);
+                Dispatcher.UIThread.Invoke(() =>
+                {
+                    activity?.AddEvent(new("InputResumed"));
+                    timer?.Dispose();
+                    closeDialog?.Dispose();
+                }, DispatcherPriority.Input);
             }
         });
     }

@@ -11,22 +11,11 @@ using ReactiveUI;
 
 namespace Beutl.ViewModels.Editors;
 
-public sealed class SetCommand : IRecordableCommand
+public sealed class SetCommand(IAbstractProperty setter, object? oldValue, object? newValue) : IRecordableCommand
 {
-    private readonly IAbstractProperty _setter;
-    private readonly object? _oldValue;
-    private readonly object? _newValue;
-
-    public SetCommand(IAbstractProperty setter, object? oldValue, object? newValue)
-    {
-        _setter = setter;
-        _oldValue = oldValue;
-        _newValue = newValue;
-    }
-
     public void Do()
     {
-        _setter.SetValue(_newValue);
+        setter.SetValue(newValue);
     }
 
     public void Redo()
@@ -36,7 +25,7 @@ public sealed class SetCommand : IRecordableCommand
 
     public void Undo()
     {
-        _setter.SetValue(_oldValue);
+        setter.SetValue(oldValue);
     }
 }
 
@@ -71,6 +60,10 @@ public sealed class BrushEditorViewModel : BaseEditorViewModel
         IsRadialGradient = Value.Select(v => v is IRadialGradientBrush)
             .ToReadOnlyReactivePropertySlim()
             .DisposeWith(Disposables);
+        
+        IsPerlinNoise = Value.Select(v => v is IPerlinNoiseBrush)
+            .ToReadOnlyReactivePropertySlim()
+            .DisposeWith(Disposables);
 
         Value.CombineWithPrevious()
             .Select(v => v.OldValue as IAnimatable)
@@ -102,6 +95,8 @@ public sealed class BrushEditorViewModel : BaseEditorViewModel
     public ReadOnlyReactivePropertySlim<bool> IsConicGradient { get; }
 
     public ReadOnlyReactivePropertySlim<bool> IsRadialGradient { get; }
+    
+    public ReadOnlyReactivePropertySlim<bool> IsPerlinNoise { get; }
 
     public ReactivePropertySlim<bool> IsExpanded { get; } = new();
 
@@ -135,7 +130,7 @@ public sealed class BrushEditorViewModel : BaseEditorViewModel
         base.ReadFromJson(json);
         try
         {
-            if (json.TryGetPropertyValue(nameof(IsExpanded), out var isExpandedNode)
+            if (json.TryGetPropertyValue(nameof(IsExpanded), out JsonNode? isExpandedNode)
                 && isExpandedNode is JsonValue isExpanded)
             {
                 IsExpanded.Value = (bool)isExpanded;

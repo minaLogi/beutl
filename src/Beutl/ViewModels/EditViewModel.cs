@@ -2,13 +2,19 @@
 using System.Text.Json.Nodes;
 using System.Windows.Input;
 
-using Avalonia;
 using Avalonia.Input;
-using Avalonia.Input.Platform;
 
 using Beutl.Animation;
 using Beutl.Api.Services;
+using Beutl.Graphics.Transformation;
+using Beutl.Helpers;
+using Beutl.Media;
+using Beutl.Media.Decoding;
+using Beutl.Media.Source;
 using Beutl.Models;
+using Beutl.Operation;
+using Beutl.Operators.Configure;
+using Beutl.Operators.Source;
 using Beutl.ProjectSystem;
 using Beutl.Services;
 using Beutl.Services.PrimitiveImpls;
@@ -16,16 +22,15 @@ using Beutl.ViewModels.Tools;
 
 using Reactive.Bindings;
 
+using Serilog;
+
+using LibraryService = Beutl.Services.LibraryService;
+
 namespace Beutl.ViewModels;
 
-public sealed class ToolTabViewModel : IDisposable
+public sealed class ToolTabViewModel(IToolContext context) : IDisposable
 {
-    public ToolTabViewModel(IToolContext context)
-    {
-        Context = context;
-    }
-
-    public IToolContext Context { get; private set; }
+    public IToolContext Context { get; private set; } = context;
 
     public int Order { get; set; } = -1;
 
@@ -38,14 +43,18 @@ public sealed class ToolTabViewModel : IDisposable
 
 public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, ISupportCloseAnimation
 {
-    private readonly CompositeDisposable _disposables = new();
+    private static readonly ILogger s_logger = Log.ForContext<EditViewModel>();
+    private readonly CompositeDisposable _disposables = [];
+    // Telemetryで使う
+    private readonly string _sceneId;
 
     public EditViewModel(Scene scene)
     {
         Scene = scene;
+        _sceneId = scene.Id.ToString();
         Library = new LibraryViewModel(this)
             .DisposeWith(_disposables);
-        Player = new PlayerViewModel(scene, IsEnabled)
+        Player = new PlayerViewModel(this)
             .DisposeWith(_disposables);
         Commands = new KnownCommandsImpl(scene, this);
         SelectedObject = new ReactiveProperty<CoreObject?>()
@@ -70,6 +79,11 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
             })
             .DisposeWith(_disposables);
 
+        SelectedLayerNumber = SelectedObject.Select(v =>
+            (v as Element)?.GetObservable(Element.ZIndexProperty).Select(i => (int?)i) ?? Observable.Return<int?>(null))
+            .Switch()
+            .ToReadOnlyReactivePropertySlim();
+
         KeyBindings = CreateKeyBindings();
     }
 
@@ -89,6 +103,8 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
     public ReactiveProperty<CoreObject?> SelectedObject { get; }
 
     public ReactivePropertySlim<bool> IsEnabled { get; } = new(true);
+
+    public ReadOnlyReactivePropertySlim<int?> SelectedLayerNumber { get; }
 
     public PlayerViewModel Player { get; private set; }
 
@@ -139,7 +155,7 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
     {
         for (int i = 0; i < BottomTabItems.Count; i++)
         {
-            var item = BottomTabItems[i];
+            ToolTabViewModel item = BottomTabItems[i];
             if (item.Context is T typed && condition(typed))
             {
                 return typed;
@@ -148,7 +164,7 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
 
         for (int i = 0; i < RightTabItems.Count; i++)
         {
-            var item = RightTabItems[i];
+            ToolTabViewModel item = RightTabItems[i];
             if (item.Context is T typed && condition(typed))
             {
                 return typed;
@@ -182,38 +198,58 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
 
     public bool OpenToolTab(IToolContext item)
     {
-        if (BottomTabItems.Any(x => x.Context == item) || RightTabItems.Any(x => x.Context == item))
+        Telemetry.ToolTabOpened(item.Extension.Name, _sceneId);
+        s_logger.Information("OpenToolTab {ToolName}", item.Extension.Name);
+        try
         {
-            item.IsSelected.Value = true;
-            return true;
+            if (BottomTabItems.Any(x => x.Context == item) || RightTabItems.Any(x => x.Context == item))
+            {
+                item.IsSelected.Value = true;
+                return true;
+            }
+            else if (!item.Extension.CanMultiple
+                && (BottomTabItems.Any(x => x.Context.Extension == item.Extension)
+                || RightTabItems.Any(x => x.Context.Extension == item.Extension)))
+            {
+                return false;
+            }
+            else
+            {
+                CoreList<ToolTabViewModel> list = item.Placement == ToolTabExtension.TabPlacement.Bottom ? BottomTabItems : RightTabItems;
+                item.IsSelected.Value = true;
+                list.Add(new ToolTabViewModel(item));
+                return true;
+            }
         }
-        else if (!item.Extension.CanMultiple
-            && (BottomTabItems.Any(x => x.Context.Extension == item.Extension)
-            || RightTabItems.Any(x => x.Context.Extension == item.Extension)))
+        catch (Exception ex)
         {
+            Telemetry.Exception(ex);
+            s_logger.Error(ex, "Failed to OpenToolTab.");
             return false;
-        }
-        else
-        {
-            CoreList<ToolTabViewModel> list = item.Placement == ToolTabExtension.TabPlacement.Bottom ? BottomTabItems : RightTabItems;
-            item.IsSelected.Value = true;
-            list.Add(new ToolTabViewModel(item));
-            return true;
         }
     }
 
     public void CloseToolTab(IToolContext item)
     {
-        if (BottomTabItems.FirstOrDefault(x => x.Context == item) is { } found0)
+        s_logger.Information("CloseToolTab {ToolName}", item.Extension.Name);
+        try
         {
-            BottomTabItems.Remove(found0);
-        }
-        else if (RightTabItems.FirstOrDefault(x => x.Context == item) is { } found1)
-        {
-            RightTabItems.Remove(found1);
-        }
+            if (BottomTabItems.FirstOrDefault(x => x.Context == item) is { } found0)
+            {
+                BottomTabItems.Remove(found0);
+            }
+            else if (RightTabItems.FirstOrDefault(x => x.Context == item) is { } found1)
+            {
+                RightTabItems.Remove(found1);
+            }
 
-        item.Dispose();
+            item.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Telemetry.Exception(ex);
+            s_logger.Error(ex, "Failed to CloseToolTab.");
+        }
     }
 
     private string ViewStateDirectory()
@@ -429,6 +465,195 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
         return null;
     }
 
+    public void AddElement(ElementDescription desc)
+    {
+        Element CreateElement()
+        {
+            return new Element()
+            {
+                Start = desc.Start,
+                Length = desc.Length,
+                ZIndex = desc.Layer,
+                FileName = RandomFileNameGenerator.Generate(Path.GetDirectoryName(Scene.FileName)!, Constants.ElementFileExtension)
+            };
+        }
+
+        void SetAccentColor(Element element, string str)
+        {
+            element.AccentColor = ColorGenerator.GenerateColor(str);
+        }
+
+        void SetTransform(SourceOperation operation, SourceOperator op)
+        {
+            if (!desc.Position.IsDefault)
+            {
+                if (op.Properties.FirstOrDefault(v => v.PropertyType == typeof(ITransform)) is IAbstractProperty<ITransform?> transformp)
+                {
+                    ITransform? transform = transformp.GetValue();
+                    AddOrSetHelper.AddOrSet(ref transform, new TranslateTransform(desc.Position));
+                    transformp.SetValue(transform);
+                }
+                else
+                {
+                    var configure = new ConfigureTransformOperator();
+                    ITransform? transform = configure.Transform.Value;
+                    AddOrSetHelper.AddOrSet(ref transform, new TranslateTransform(desc.Position));
+                    configure.Transform.Value = transform;
+                    operation.Children.Add(configure);
+                }
+            }
+        }
+        TimelineViewModel? timeline = FindToolTab<TimelineViewModel>();
+
+        if (desc.FileName != null)
+        {
+            (TimeRange Range, int ZIndex)? scrollPos = null;
+
+            Element CreateElementFor<T>(out T t)
+                where T : SourceOperator, new()
+            {
+                Element element = CreateElement();
+                element.Name = Path.GetFileName(desc.FileName!);
+                SetAccentColor(element, typeof(T).FullName!);
+
+                element.Operation.AddChild(t = new T()).Do();
+                SetTransform(element.Operation, t);
+
+                return element;
+            }
+
+            var list = new List<IRecordableCommand>();
+            if (MatchFileImage(desc.FileName))
+            {
+                Element element = CreateElementFor(out SourceImageOperator t);
+                BitmapSource.TryOpen(desc.FileName, out BitmapSource? image);
+                t.Source.Value = image;
+
+                element.Save(element.FileName);
+                list.Add(Scene.AddChild(element));
+                scrollPos = (element.Range, element.ZIndex);
+            }
+            else if (MatchFileVideoOnly(desc.FileName))
+            {
+                Element element1 = CreateElementFor(out SourceVideoOperator t1);
+                Element element2 = CreateElementFor(out SourceSoundOperator t2);
+                element2.ZIndex++;
+                VideoSource.TryOpen(desc.FileName, out VideoSource? video);
+                SoundSource.TryOpen(desc.FileName, out SoundSource? sound);
+                t1.Source.Value = video;
+                t2.Source.Value = sound;
+
+                if (video != null)
+                    element1.Length = video.Duration;
+                if (sound != null)
+                    element2.Length = sound.Duration;
+
+                element1.Save(element1.FileName);
+                element2.Save(element2.FileName);
+                list.Add(Scene.AddChild(element1));
+                list.Add(Scene.AddChild(element2));
+                scrollPos = (element1.Range, element1.ZIndex);
+            }
+            else if (MatchFileAudioOnly(desc.FileName))
+            {
+                Element element = CreateElementFor(out SourceSoundOperator t);
+                SoundSource.TryOpen(desc.FileName, out SoundSource? sound);
+                t.Source.Value = sound;
+                if (sound != null)
+                {
+                    element.Length = sound.Duration;
+                }
+
+                element.Save(element.FileName);
+                list.Add(Scene.AddChild(element));
+                scrollPos = (element.Range, element.ZIndex);
+            }
+
+            list.ToArray()
+                .ToCommand()
+                .DoAndRecord(CommandRecorder.Default);
+
+            if (scrollPos.HasValue && timeline != null)
+            {
+                timeline?.ScrollTo.Execute(scrollPos.Value);
+            }
+        }
+        else
+        {
+            Element element = CreateElement();
+            if (desc.InitialOperator != null)
+            {
+                LibraryItem? item = LibraryService.Current.FindItem(desc.InitialOperator);
+                if (item != null)
+                {
+                    element.Name = item.DisplayName;
+                }
+
+                //Todo: レイヤーのアクセントカラー
+                //sLayer.AccentColor = item.InitialOperator.AccentColor;
+                element.AccentColor = ColorGenerator.GenerateColor(desc.InitialOperator.FullName ?? desc.InitialOperator.Name);
+                var operatour = (SourceOperator)Activator.CreateInstance(desc.InitialOperator)!;
+                element.Operation.AddChild(operatour).Do();
+                SetTransform(element.Operation, operatour);
+            }
+
+            element.Save(element.FileName);
+            Scene.AddChild(element).DoAndRecord(CommandRecorder.Default);
+
+            timeline?.ScrollTo.Execute((element.Range, element.ZIndex));
+        }
+    }
+
+    private static bool MatchFileExtensions(string filePath, IEnumerable<string> extensions)
+    {
+        return extensions
+            .Select(x =>
+            {
+                int idx = x.LastIndexOf('.');
+                if (0 <= idx)
+                    return x.Substring(idx);
+                else
+                    return x;
+            })
+            .Any(filePath.EndsWith);
+    }
+
+    private static bool MatchFileAudioOnly(string filePath)
+    {
+        return MatchFileExtensions(filePath, DecoderRegistry.EnumerateDecoder()
+            .SelectMany(x => x.AudioExtensions())
+            .Distinct());
+    }
+
+    private static bool MatchFileVideoOnly(string filePath)
+    {
+        return MatchFileExtensions(filePath, DecoderRegistry.EnumerateDecoder()
+            .SelectMany(x => x.VideoExtensions())
+            .Distinct());
+    }
+
+    private static bool MatchFileImage(string filePath)
+    {
+        string[] extensions =
+        [
+            "*.bmp",
+            "*.gif",
+            "*.ico",
+            "*.jpg",
+            "*.jpeg",
+            "*.png",
+            "*.wbmp",
+            "*.webp",
+            "*.pkm",
+            "*.ktx",
+            "*.astc",
+            "*.dng",
+            "*.heif",
+            "*.avif",
+        ];
+        return MatchFileExtensions(filePath, extensions);
+    }
+
     void ISupportCloseAnimation.Close(object obj)
     {
         var searcher = new ObjectSearcher(obj, v => v is IAnimation);
@@ -469,8 +694,8 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
             };
         }
 
-        return new List<KeyBinding>
-        {
+        return
+        [
             // PlayPause: Space
             KeyBinding(Key.Space, KeyModifiers.None, Player.PlayPause),
             // Next: Right
@@ -481,28 +706,16 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
             KeyBinding(Key.Home, KeyModifiers.None, Player.Start),
             // End: End
             KeyBinding(Key.End, KeyModifiers.None, Player.End),
-        };
+        ];
     }
 
-    private sealed class KnownCommandsImpl : IKnownEditorCommands
+    private sealed class KnownCommandsImpl(Scene scene, EditViewModel viewModel) : IKnownEditorCommands
     {
-        private readonly Scene _scene;
-        private readonly EditViewModel _viewModel;
-
-        public KnownCommandsImpl(Scene scene, EditViewModel viewModel)
-        {
-            _scene = scene;
-            _viewModel = viewModel;
-        }
-
         public ValueTask<bool> OnSave()
         {
-            _scene.Save(_scene.FileName);
-            foreach (Element layer in _scene.Children)
-            {
-                layer.Save(layer.FileName);
-            }
-            _viewModel.SaveState();
+            scene.Save(scene.FileName);
+            Parallel.ForEach(scene.Children, item => item.Save(item.FileName));
+            viewModel.SaveState();
 
             return ValueTask.FromResult(true);
         }

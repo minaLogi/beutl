@@ -1,24 +1,25 @@
 ﻿using Avalonia;
 using Avalonia.Collections;
-using Beutl.Collections.Pooled;
 using Avalonia.Controls;
 using Avalonia.Controls.PanAndZoom;
 using Avalonia.Controls.Shapes;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 
+using Beutl.Collections.Pooled;
 using Beutl.NodeTree;
+using Beutl.Services;
 using Beutl.ViewModels.NodeTree;
 
 namespace Beutl.Views.NodeTree;
 
 public partial class NodeTreeView : UserControl
 {
-    private readonly CompositeDisposable _disposables = new();
+    private readonly CompositeDisposable _disposables = [];
     private Point _rightClickedPosition;
     internal Point _leftClickedPosition;
     private bool _rangeSelectionPressed;
-    private List<(NodeView Node, bool IsSelectedOriginal)> _rangeSelection = new();
+    private readonly List<(NodeView Node, bool IsSelectedOriginal)> _rangeSelection = [];
     private bool _matrixUpdating;
 
     public NodeTreeView()
@@ -40,7 +41,7 @@ public partial class NodeTreeView : UserControl
     private void OnDrop(object? sender, DragEventArgs e)
     {
         if (DataContext is NodeTreeViewModel viewModel
-            && e.Data.Get("Node") is Type item)
+            && e.Data.Get(KnownLibraryItemFormats.Node) is Type item)
         {
             Point point = e.GetPosition(canvas) - new Point(215 / 2, 0);
             viewModel.AddSocket(item, point);
@@ -49,7 +50,7 @@ public partial class NodeTreeView : UserControl
 
     private void OnDragEnter(object? sender, DragEventArgs e)
     {
-        if (e.Data.Contains("Node"))
+        if (e.Data.Contains(KnownLibraryItemFormats.Node))
         {
             e.DragEffects = DragDropEffects.Copy;
         }
@@ -76,7 +77,7 @@ public partial class NodeTreeView : UserControl
 
     private void UpdateRangeSelection()
     {
-        foreach ((var node, bool isSelectedOriginal) in _rangeSelection)
+        foreach ((NodeView? node, bool isSelectedOriginal) in _rangeSelection)
         {
             if (node.DataContext is NodeViewModel nodeViewModel)
             {

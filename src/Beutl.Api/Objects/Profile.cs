@@ -1,7 +1,10 @@
 ﻿using System.Collections.Specialized;
+using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Reactive.Linq;
 using System.Text;
+
+using Nito.AsyncEx;
 
 using Reactive.Bindings;
 
@@ -54,13 +57,19 @@ public class Profile
 
     public IReadOnlyReactiveProperty<int> PublicPackages { get; }
 
+    public MyAsyncLock Lock => _clients.Lock;
+
     public async Task RefreshAsync()
     {
+        using Activity? activity = _clients.ActivitySource.StartActivity("Profile.Refresh", ActivityKind.Client);
+
         _response.Value = await _clients.Users.GetUserAsync(Name);
     }
 
     public async Task UpdateAsync(UpdateProfileRequest request)
     {
+        using Activity? activity = _clients.ActivitySource.StartActivity("Profile.Update", ActivityKind.Client);
+
         _response.Value = await _clients.Users.PatchAsync(Name, request);
     }
 
@@ -85,6 +94,8 @@ public class Profile
 
     public async Task<Package> AddPackageAsync(string name, CreatePackageRequest request)
     {
+        using Activity? activity = _clients.ActivitySource.StartActivity("Profile.AddPackage", ActivityKind.Client);
+
         PackageResponse response = await _clients.Packages.PostAsync(name, request);
         return new Package(this, response, _clients);
     }
@@ -101,6 +112,10 @@ public class Profile
 
     public async Task<Package[]> GetPackagesAsync(int start = 0, int count = 30)
     {
+        using Activity? activity = _clients.ActivitySource.StartActivity("Profile.GetPackages", ActivityKind.Client);
+        activity?.SetTag("start", start);
+        activity?.SetTag("count", count);
+
         return await (await _clients.Users.GetPackagesAsync(Name, start, count))
             .ToAsyncEnumerable()
             .SelectAwait(async x => await _clients.Packages.GetPackageAsync(x.Name))
@@ -110,12 +125,17 @@ public class Profile
 
     public async Task<Asset> AddAssetAsync(string name, CreateVirtualAssetRequest request)
     {
+        using Activity? activity = _clients.ActivitySource.StartActivity("Profile.AddAsset", ActivityKind.Client);
+        activity?.SetTag("virtual", true);
         AssetMetadataResponse response = await _clients.Assets.PostAsync(Name, name, request);
         return new Asset(this, response, _clients);
     }
 
     public async Task<Asset> AddAssetAsync(string name, FileStream stream, string contentType)
     {
+        using Activity? activity = _clients.ActivitySource.StartActivity("Profile.AddAsset", ActivityKind.Client);
+        activity?.SetTag("virtual", false);
+
         var streamContent = new StreamContent(stream);
         streamContent.Headers.ContentType = new MediaTypeHeaderValue(contentType);
 
@@ -136,11 +156,16 @@ public class Profile
         };
 
         AssetMetadataResponse response = await _clients.Assets.PostAsync(Name, name, multiPartContent);
+
         return new Asset(this, response, _clients);
     }
 
     public async Task<Asset[]> GetAssetsAsync(int start = 0, int count = 30)
     {
+        using Activity? activity = _clients.ActivitySource.StartActivity("Profile.GetAssets", ActivityKind.Client);
+        activity?.SetTag("start", start);
+        activity?.SetTag("count", count);
+
         return await (await _clients.Users.GetAssetsAsync(Name, start, count))
             .ToAsyncEnumerable()
             .SelectAwait(async x => await _clients.Assets.GetAssetAsync(Name, x.Name))
@@ -150,12 +175,14 @@ public class Profile
 
     public async Task<Asset> GetAssetAsync(long id)
     {
+        using Activity? activity = _clients.ActivitySource.StartActivity("Profile.GetAsset", ActivityKind.Client);
         AssetMetadataResponse response = await _clients.Assets.GetAsset2Async(id);
         return new Asset(this, response, _clients);
     }
 
     public async Task<Asset> GetAssetAsync(string name)
     {
+        using Activity? activity = _clients.ActivitySource.StartActivity("Profile.GetAsset", ActivityKind.Client);
         AssetMetadataResponse response = await _clients.Assets.GetAssetAsync(Name, name);
         return new Asset(this, response, _clients);
     }

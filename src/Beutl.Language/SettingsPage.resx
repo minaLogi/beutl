@@ -192,4 +192,118 @@
   <data name="DeviceInfomation" xml:space="preserve">
     <value>Device Infomation</value>
   </data>
+  <data name="ChangePrimaryPropertiesToBeHidden" xml:space="preserve">
+    <value>Change the primary properties to be hidden</value>
+  </data>
+  <data name="EditorSettings" xml:space="preserve">
+    <value>Editor settings</value>
+  </data>
+  <data name="HidePrimaryProperties" xml:space="preserve">
+    <value>Hide primary properties</value>
+  </data>
+  <data name="HidePrimaryProperties_Description" xml:space="preserve">
+    <value>Primary properties can be set by adding 'Source Operation'. Applies after the end of the program.</value>
+  </data>
+  <data name="PrimaryProperties" xml:space="preserve">
+    <value>Primary properties</value>
+  </data>
+  <data name="AddPropertyToHide" xml:space="preserve">
+    <value>Add property to hide</value>
+  </data>
+  <data name="DecoderPriority" xml:space="preserve">
+    <value>Decoder Priority</value>
+  </data>
+  <data name="DecoderPriority_Description" xml:space="preserve">
+    <value>You can change the priority order of decoders. The upper decoder has priority.</value>
+  </data>
+  <data name="AccentColor" xml:space="preserve">
+    <value>Accent color</value>
+  </data>
+  <data name="CustomColor" xml:space="preserve">
+    <value>Custom color</value>
+  </data>
+  <data name="UseCustomAccentColor" xml:space="preserve">
+    <value>Use custom accent color</value>
+  </data>
+  <data name="Telemetry_Beutl_Application" xml:space="preserve">
+    <value>Application</value>
+  </data>
+  <data name="Telemetry_Description_Beutl_Application" xml:space="preserve">
+    <value>The following information is collected to improve application performance
+Time the application was started, elapsed time of operation, and number of items retrieved by the API</value>
+  </data>
+  <data name="Telemetry_Beutl_ViewTracking" xml:space="preserve">
+    <value>Display and operation</value>
+  </data>
+  <data name="Telemetry_Description_Beutl_ViewTracking" xml:space="preserve">
+    <value>Collect what features users view or use.</value>
+  </data>
+  <data name="Telemetry_Beutl_PackageManagement" xml:space="preserve">
+    <value>Package Management</value>
+  </data>
+  <data name="Telemetry_Description_Beutl_PackageManagement" xml:space="preserve">
+    <value>Collect the time taken to install and load extensions.</value>
+  </data>
+  <data name="Telemetry_Beutl_Api_Client" xml:space="preserve">
+    <value>APIクライアント</value>
+  </data>
+  <data name="Telemetry_Description_Beutl_Api_Client" xml:space="preserve">
+    <value>Collect API call times used by extension store and account functions.</value>
+  </data>
+  <data name="Telemetry" xml:space="preserve">
+    <value>Telemetry</value>
+  </data>
+  <data name="Telemetry_ShortDescription" xml:space="preserve">
+    <value>Settings about the data to be collected</value>
+  </data>
+  <data name="Telemetry_Description" xml:space="preserve">
+    <value>To improve Beutl, we collect anonymous usage data.
+For more information, please refer to the following pages.</value>
+  </data>
+  <data name="Telemetry_All_Errors" xml:space="preserve">
+    <value>All Errors</value>
+  </data>
+  <data name="Telemetry_Description_All_Errors" xml:space="preserve">
+    <value>Collect all errors that occur.</value>
+  </data>
+  <data name="ShowExactBoundaries_Description" xml:space="preserve">
+    <value>Displays the boundaries of elements accurately during preview.
+Enabling this setting may make the border invisible.</value>
+  </data>
+  <data name="ShowExactBoundaries" xml:space="preserve">
+    <value>Display precise boundaries</value>
+  </data>
+  <data name="AutoAdjustSceneDuration" xml:space="preserve">
+    <value>Automatically adjusts scene duration</value>
+  </data>
+  <data name="AutoAdjustSceneDuration_Description" xml:space="preserve">
+    <value>When elements are added, if the duration of the scene needs to be adjusted, it will automatically do so.</value>
+  </data>
+  <data name="SomeSettingsHaveBeenMoved" xml:space="preserve">
+    <value>Some settings have been moved.</value>
+  </data>
+  <data name="BeutlPackageFile" xml:space="preserve">
+    <value>Packages</value>
+  </data>
+  <data name="FontFiles" xml:space="preserve">
+    <value>Font Files</value>
+  </data>
+  <data name="TextFiles" xml:space="preserve">
+    <value>Text Files</value>
+  </data>
+  <data name="Zip" xml:space="preserve">
+    <value>Zip</value>
+  </data>
+  <data name="EnablePointerLockInProperty" xml:space="preserve">
+    <value>Enable pointer lock</value>
+  </data>
+  <data name="EnablePointerLockInProperty_Description" xml:space="preserve">
+    <value>Hides the cursor during drag operations in the Property Editor. (Windows only)</value>
+  </data>
+  <data name="Telemetry_Beutl_Logging" xml:space="preserve">
+    <value>Logging</value>
+  </data>
+  <data name="Telemetry_Description_Beutl_Logging" xml:space="preserve">
+    <value>More detailed usage information is collected. The logs sent are also stored under the ".beutl/log" directory.</value>
+  </data>
 </root>

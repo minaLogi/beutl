@@ -1,4 +1,5 @@
-﻿using System.Reflection;
+﻿using System.Collections.Frozen;
+using System.Reflection;
 
 using Microsoft.Extensions.DependencyModel;
 
@@ -9,8 +10,8 @@ namespace Beutl.Api.Services;
 
 internal static class CoreLibraries
 {
-    private static Dictionary<string, string>? s_runtimeMap;
-    private static Dictionary<string, string>? s_pkgMap;
+    private static FrozenDictionary<string, string>? s_runtimeMap;
+    private static FrozenDictionary<string, string>? s_pkgMap;
     private static List<PackageIdentity>? s_preferredVersions;
 
     public static IEnumerable<PackageIdentity> GetPreferredVersions()
@@ -35,7 +36,11 @@ internal static class CoreLibraries
             library.Add(new(lib.Name, lib.Version));
         }
 
+#if DEBUG
+        library.Add(new("Beutl.Sdk", "1.0.0-preview.4"));
+#else
         library.Add(new("Beutl.Sdk", GitVersionInformation.NuGetVersionV2));
+#endif
 
         return library;
     }
@@ -94,9 +99,9 @@ internal static class CoreLibraries
         return library;
     }
 
-    private static Dictionary<string, string> RuntimeDepsMap => s_runtimeMap ??= CollectRuntimeDependencies().ToDictionary(x => x.Name, x => x.Version);
+    private static FrozenDictionary<string, string> RuntimeDepsMap => s_runtimeMap ??= CollectRuntimeDependencies().ToFrozenDictionary(x => x.Name, x => x.Version);
 
-    private static Dictionary<string, string> PackageDepsMap => s_pkgMap ??= CollectPackageDependencies().ToDictionary(x => x.Name, x => x.Version);
+    private static FrozenDictionary<string, string> PackageDepsMap => s_pkgMap ??= CollectPackageDependencies().ToFrozenDictionary(x => x.Name, x => x.Version);
 
     public static bool IncludedInRuntimeDependencies(string name, Version? version)
     {
@@ -119,7 +124,7 @@ internal static class CoreLibraries
         if (PackageDepsMap.TryGetValue(name, out string? installedVersionStr))
         {
             var installedVersion = new NuGetVersion(installedVersionStr);
-            return installedVersion == version;
+            return installedVersion >= version;
 
         }
 
@@ -132,19 +137,7 @@ internal static class CoreLibraries
         {
             var version = new NuGetVersion(versionStr);
 
-            // インストールされているバージョンがMinよりも小さい
-            if (versionRange.HasLowerBound && versionRange.MinVersion > version)
-            {
-                return false;
-            }
-
-            // インストールされているバージョンがMaxよりも大きい
-            if (versionRange.HasUpperBound && versionRange.MaxVersion < version)
-            {
-                return false;
-            }
-
-            return true;
+            return versionRange.Satisfies(version);
         }
 
         return false;

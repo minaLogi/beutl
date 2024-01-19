@@ -1,8 +1,9 @@
 ﻿using System.Collections.Specialized;
-using System.Reflection;
+using System.Diagnostics;
 using System.Text.Json.Nodes;
 
 using Beutl.Collections;
+using Beutl.Serialization;
 
 namespace Beutl;
 
@@ -21,7 +22,7 @@ public sealed class Project : Hierarchical, IStorable
     private EventHandler? _saved;
     private EventHandler? _restored;
     private readonly HierarchicalList<ProjectItem> _items;
-    private readonly Dictionary<string, string> _variables = new();
+    private readonly Dictionary<string, string> _variables = [];
 
     static Project()
     {
@@ -70,10 +71,13 @@ public sealed class Project : Hierarchical, IStorable
 
     public void Restore(string filename)
     {
+        using Activity? activity = BeutlApplication.ActivitySource.StartActivity("Project.Restore");
+        activity?.SetTag("filenameHash", filename.GetMD5Hash());
+
         _fileName = filename;
         _rootDirectory = Path.GetDirectoryName(filename);
 
-        this.JsonRestore(filename);
+        this.JsonRestore2(filename);
         LastSavedTime = File.GetLastWriteTimeUtc(filename);
 
         _restored?.Invoke(this, EventArgs.Empty);
@@ -81,16 +85,20 @@ public sealed class Project : Hierarchical, IStorable
 
     public void Save(string filename)
     {
+        using Activity? activity = BeutlApplication.ActivitySource.StartActivity("Project.Save");
+        activity?.SetTag("filenameHash", filename.GetMD5Hash());
+
         _fileName = filename;
         _rootDirectory = Path.GetDirectoryName(filename);
         LastSavedTime = DateTime.UtcNow;
 
-        this.JsonSave(filename);
+        this.JsonSave2(filename);
         File.SetLastWriteTimeUtc(filename, LastSavedTime);
 
         _saved?.Invoke(this, EventArgs.Empty);
     }
 
+    [ObsoleteSerializationApi]
     public override void ReadFromJson(JsonObject json)
     {
         base.ReadFromJson(json);
@@ -125,6 +133,7 @@ public sealed class Project : Hierarchical, IStorable
         }
     }
 
+    [ObsoleteSerializationApi]
     public override void WriteToJson(JsonObject json)
     {
         base.WriteToJson(json);
@@ -149,6 +158,48 @@ public sealed class Project : Hierarchical, IStorable
         }
 
         json["variables"] = variables;
+    }
+
+    public override void Deserialize(ICoreSerializationContext context)
+    {
+        using Activity? activity = BeutlApplication.ActivitySource.StartActivity("Project.Serialize");
+        base.Deserialize(context);
+
+        AppVersion = context.GetValue<string>("appVersion") ?? AppVersion;
+        MinAppVersion = context.GetValue<string>("minAppVersion") ?? MinAppVersion;
+
+        SyncronizeScenes(context.GetValue<string[]>("items")!);
+
+        if (context.GetValue<Dictionary<string, string>>("variables") is { } vars)
+        {
+            Variables.Clear();
+            foreach (KeyValuePair<string, string> item in vars)
+            {
+                Variables.Add(item);
+            }
+        }
+
+        activity?.SetTag("appVersion", AppVersion);
+        activity?.SetTag("minAppVersion", MinAppVersion);
+        activity?.SetTag("itemsCount", Items.Count);
+    }
+
+    public override void Serialize(ICoreSerializationContext context)
+    {
+        using Activity? activity = BeutlApplication.ActivitySource.StartActivity("Project.Serialize");
+        activity?.SetTag("appVersion", AppVersion);
+        activity?.SetTag("minAppVersion", MinAppVersion);
+        activity?.SetTag("itemsCount", Items.Count);
+
+        base.Serialize(context);
+
+        context.SetValue("appVersion", AppVersion);
+        context.SetValue("minAppVersion", MinAppVersion);
+
+        context.SetValue("items", Items
+            .Select(item => Path.GetRelativePath(RootDirectory, item.FileName).Replace('\\', '/')));
+
+        context.SetValue("variables", Variables);
     }
 
     public void Dispose()

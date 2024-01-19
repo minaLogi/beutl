@@ -5,7 +5,6 @@ using Avalonia.Media;
 using Avalonia.Media.Immutable;
 
 using Beutl.Commands;
-using Beutl.Extensibility;
 using Beutl.NodeTree;
 
 using Reactive.Bindings;
@@ -227,20 +226,11 @@ public class SocketViewModel : NodeItemViewModel
         }
     }
 
-    private sealed class DisconnectCommand : IRecordableCommand
+    private sealed class DisconnectCommand(IInputSocket inputSocket, IOutputSocket outputSocket) : IRecordableCommand
     {
-        private readonly IInputSocket _inputSocket;
-        private readonly IOutputSocket _outputSocket;
-
-        public DisconnectCommand(IInputSocket inputSocket, IOutputSocket outputSocket)
-        {
-            _inputSocket = inputSocket;
-            _outputSocket = outputSocket;
-        }
-
         public void Do()
         {
-            _outputSocket.Disconnect(_inputSocket);
+            outputSocket.Disconnect(inputSocket);
         }
 
         public void Redo()
@@ -250,26 +240,17 @@ public class SocketViewModel : NodeItemViewModel
 
         public void Undo()
         {
-            _outputSocket.TryConnect(_inputSocket);
+            outputSocket.TryConnect(inputSocket);
         }
     }
 
-    private sealed class ConnectCommand : IRecordableCommand
+    private sealed class ConnectCommand(IInputSocket inputSocket, IOutputSocket outputSocket) : IRecordableCommand
     {
-        private readonly IInputSocket _inputSocket;
-        private readonly IOutputSocket _outputSocket;
-
-        public ConnectCommand(IInputSocket inputSocket, IOutputSocket outputSocket)
-        {
-            _inputSocket = inputSocket;
-            _outputSocket = outputSocket;
-        }
-
         public bool IsConnected { get; set; }
 
         public void Do()
         {
-            IsConnected = _outputSocket.TryConnect(_inputSocket);
+            IsConnected = outputSocket.TryConnect(inputSocket);
         }
 
         public void Redo()
@@ -279,7 +260,7 @@ public class SocketViewModel : NodeItemViewModel
 
         public void Undo()
         {
-            _outputSocket.Disconnect(_inputSocket);
+            outputSocket.Disconnect(inputSocket);
         }
     }
 }

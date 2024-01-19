@@ -8,8 +8,6 @@ using System.Text.Json.Nodes;
 
 using Beutl.Api.Objects;
 using Beutl.Api.Services;
-
-using Beutl;
 using Beutl.Configuration;
 
 using Reactive.Bindings;
@@ -18,11 +16,11 @@ namespace Beutl.Api;
 
 public class BeutlApiApplication
 {
-    //private const string BaseUrl = "https://localhost:7278";
+    //private const string BaseUrl = "https://localhost:44459";
     private const string BaseUrl = "https://beutl.beditor.net";
     private readonly HttpClient _httpClient;
     private readonly ReactivePropertySlim<AuthorizedUser?> _authorizedUser = new();
-    private readonly Dictionary<Type, Func<object>> _services = new();
+    private readonly Dictionary<Type, Lazy<object>> _services = [];
 
     public BeutlApiApplication(HttpClient httpClient)
     {
@@ -37,11 +35,17 @@ public class BeutlApiApplication
         App = new AppClient(httpClient) { BaseUrl = BaseUrl };
 
         ViewConfig viewConfig = GlobalConfiguration.Instance.ViewConfig;
-        httpClient.DefaultRequestHeaders.AcceptLanguage.Clear();
-        httpClient.DefaultRequestHeaders.AcceptLanguage.Add(new StringWithQualityHeaderValue(viewConfig.UICulture.Name));
+        string culture = viewConfig.UICulture.Name;
+        if (!string.IsNullOrWhiteSpace(culture))
+        {
+            httpClient.DefaultRequestHeaders.AcceptLanguage.Clear();
+            httpClient.DefaultRequestHeaders.AcceptLanguage.Add(new StringWithQualityHeaderValue(culture));
+        }
 
         RegisterAll();
     }
+
+    public ActivitySource ActivitySource { get; } = new("Beutl.Api.Client", GitVersionInformation.SemVer);
 
     public PackagesClient Packages { get; }
 
@@ -56,24 +60,26 @@ public class BeutlApiApplication
     public DiscoverClient Discover { get; }
 
     public LibraryClient Library { get; }
-    
+
     public AppClient App { get; }
+
+    public MyAsyncLock Lock { get; } = new();
 
     public IReadOnlyReactiveProperty<AuthorizedUser?> AuthorizedUser => _authorizedUser;
 
     public T GetResource<T>()
         where T : IBeutlApiResource
     {
-        if (_services.TryGetValue(typeof(T), out Func<object>? func))
+        if (_services.TryGetValue(typeof(T), out Lazy<object>? lazy))
         {
-            return (T)func();
+            return (T)lazy.Value;
         }
 
-        foreach (KeyValuePair<Type, Func<object>> item in _services)
+        foreach (KeyValuePair<Type, Lazy<object>> item in _services)
         {
             if (item.Key.IsAssignableTo(typeof(T)))
             {
-                return (T)item.Value();
+                return (T)item.Value.Value;
             }
         }
 
@@ -83,33 +89,31 @@ public class BeutlApiApplication
     private void RegisterAll()
     {
         Register(() => new DiscoverService(this));
-        Register(() => GetResource<PackageManager>().ExtensionProvider);
+        Register(() => ExtensionProvider.Current);
         Register(() => new InstalledPackageRepository());
         Register(() => new AcceptedLicenseManager());
         Register(() => new PackageChangesQueue());
         Register(() => new LibraryService(this));
         Register(() => new PackageInstaller(new HttpClient(), GetResource<InstalledPackageRepository>()));
-        Register(() => new PackageManager(GetResource<InstalledPackageRepository>(), this));
+        Register(() => new PackageManager(GetResource<InstalledPackageRepository>(), GetResource<ExtensionProvider>(), this));
     }
 
     private void Register<T>(Func<T> factory)
         where T : IBeutlApiResource
     {
-        IBeutlApiResource? obj = null;
-        _services.Add(typeof(T), () =>
-        {
-            obj ??= factory();
-            return obj;
-        });
+        _services.Add(typeof(T), new Lazy<object>(() => factory()));
     }
 
-    public void SignOut()
+    public void SignOut(bool deleteFile = true)
     {
         _authorizedUser.Value = null;
-        string fileName = Path.Combine(Helper.AppRoot, "user.json");
-        if (File.Exists(fileName))
+        if (deleteFile)
         {
-            File.Delete(fileName);
+            string fileName = Path.Combine(Helper.AppRoot, "user.json");
+            if (File.Exists(fileName))
+            {
+                File.Delete(fileName);
+            }
         }
     }
 
@@ -125,69 +129,90 @@ public class BeutlApiApplication
 
     private async Task<AuthorizedUser> SignInExternalAsync(string provider, CancellationToken cancellationToken)
     {
-        string continueUri = $"http://localhost:{GetRandomUnusedPort()}/__/auth/handler";
-        CreateAuthUriResponse authUriRes = await Account.CreateAuthUriAsync(new CreateAuthUriRequest(continueUri), cancellationToken);
-        using HttpListener listener = StartListener($"{continueUri}/");
-
-        string uri = $"{BaseUrl}/Identity/Account/Login?provider={provider}&returnUrl={authUriRes.Auth_uri}";
-
-        Process.Start(new ProcessStartInfo(uri)
+        using (Activity? activity = ActivitySource.StartActivity("SignInExternalAsync", ActivityKind.Client))
         {
-            UseShellExecute = true
-        });
+            string continueUri = $"http://localhost:{GetRandomUnusedPort()}/__/auth/handler";
+            CreateAuthUriResponse authUriRes = await Account.CreateAuthUriAsync(new CreateAuthUriRequest(continueUri), cancellationToken);
+            using HttpListener listener = StartListener($"{continueUri}/");
+            activity?.AddEvent(new("Started_Listener"));
 
-        string? code = await GetResponseFromListener(listener, cancellationToken);
-        if (string.IsNullOrWhiteSpace(code))
-        {
-            throw new Exception("The returned code was empty.");
+            string uri = $"{BaseUrl}/api/v2/identity/signInWith?provider={provider}&returnUrl={Uri.EscapeDataString(authUriRes.Auth_uri)}";
+
+            Process.Start(new ProcessStartInfo(uri)
+            {
+                UseShellExecute = true,
+                Verb = "open"
+            });
+
+            string? code = await GetResponseFromListener(listener, cancellationToken);
+            activity?.AddEvent(new("Received_Code"));
+            if (string.IsNullOrWhiteSpace(code))
+            {
+                throw new Exception("The returned code was empty.");
+            }
+
+            AuthResponse authResponse = await Account.CodeToJwtAsync(new CodeToJwtRequest(code, authUriRes.Session_id), cancellationToken);
+            activity?.AddEvent(new("Done_CodeToJwtAsync"));
+
+            _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", authResponse.Token);
+            ProfileResponse profileResponse = await Users.Get2Async(cancellationToken);
+            var profile = new Profile(profileResponse, this);
+
+            _authorizedUser.Value = new AuthorizedUser(profile, authResponse, this, _httpClient, DateTime.UtcNow);
+            SaveUser();
+            activity?.AddEvent(new("Saved_User"));
+            return _authorizedUser.Value;
         }
-
-        AuthResponse authResponse = await Account.CodeToJwtAsync(new CodeToJwtRequest(code, authUriRes.Session_id), cancellationToken);
-
-        _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", authResponse.Token);
-        ProfileResponse profileResponse = await Users.Get2Async(cancellationToken);
-        var profile = new Profile(profileResponse, this);
-
-        _authorizedUser.Value = new AuthorizedUser(profile, authResponse, this, _httpClient);
-        SaveUser();
-        return _authorizedUser.Value;
     }
 
     public async Task<AuthorizedUser> SignInAsync(CancellationToken cancellationToken)
     {
-        string continueUri = $"http://localhost:{GetRandomUnusedPort()}/__/auth/handler";
-        CreateAuthUriResponse authUriRes = await Account.CreateAuthUriAsync(new CreateAuthUriRequest(continueUri), cancellationToken);
-        using HttpListener listener = StartListener($"{continueUri}/");
-
-        string uri = $"{BaseUrl}/Identity/Account/Login?returnUrl={authUriRes.Auth_uri}";
-
-        Process.Start(new ProcessStartInfo(uri)
+        using (Activity? activity = ActivitySource.StartActivity("SignInAsync", ActivityKind.Client))
         {
-            UseShellExecute = true
-        });
+            using (await Lock.LockAsync(cancellationToken))
+            {
+                activity?.AddEvent(new("Entered_AsyncLock"));
+                string continueUri = $"http://localhost:{GetRandomUnusedPort()}/__/auth/handler";
+                CreateAuthUriResponse authUriRes = await Account.CreateAuthUriAsync(new CreateAuthUriRequest(continueUri), cancellationToken);
+                using HttpListener listener = StartListener($"{continueUri}/");
+                activity?.AddEvent(new("Started_Listener"));
 
-        string? code = await GetResponseFromListener(listener, cancellationToken);
-        if (string.IsNullOrWhiteSpace(code))
-        {
-            throw new Exception("The returned code was empty.");
+                string uri = $"{BaseUrl}/account/signIn?returnUrl={Uri.EscapeDataString(authUriRes.Auth_uri)}";
+
+                Process.Start(new ProcessStartInfo(uri)
+                {
+                    UseShellExecute = true,
+                    Verb = "open"
+                });
+
+                string? code = await GetResponseFromListener(listener, cancellationToken);
+                activity?.AddEvent(new("Received_Code"));
+                if (string.IsNullOrWhiteSpace(code))
+                {
+                    throw new Exception("The returned code was empty.");
+                }
+
+                AuthResponse authResponse = await Account.CodeToJwtAsync(new CodeToJwtRequest(code, authUriRes.Session_id), cancellationToken);
+                activity?.AddEvent(new("Done_CodeToJwtAsync"));
+
+                _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", authResponse.Token);
+                ProfileResponse profileResponse = await Users.Get2Async(cancellationToken);
+                var profile = new Profile(profileResponse, this);
+
+                _authorizedUser.Value = new AuthorizedUser(profile, authResponse, this, _httpClient, DateTime.UtcNow);
+                SaveUser();
+                activity?.AddEvent(new("Saved_User"));
+                return _authorizedUser.Value;
+            }
         }
-
-        AuthResponse authResponse = await Account.CodeToJwtAsync(new CodeToJwtRequest(code, authUriRes.Session_id), cancellationToken);
-
-        _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", authResponse.Token);
-        ProfileResponse profileResponse = await Users.Get2Async(cancellationToken);
-        var profile = new Profile(profileResponse, this);
-
-        _authorizedUser.Value = new AuthorizedUser(profile, authResponse, this, _httpClient);
-        SaveUser();
-        return _authorizedUser.Value;
     }
 
     public static void OpenAccountSettings()
     {
-        Process.Start(new ProcessStartInfo($"{BaseUrl}/Identity/Account/Manage")
+        Process.Start(new ProcessStartInfo($"{BaseUrl}/account/manage")
         {
-            UseShellExecute = true
+            UseShellExecute = true,
+            Verb = "open"
         });
     }
 
@@ -209,20 +234,37 @@ public class BeutlApiApplication
                 using var writer = new Utf8JsonWriter(stream);
                 obj.WriteTo(writer);
             }
+
+            user._writeTime = File.GetLastWriteTimeUtc(fileName);
         }
     }
 
-    public async Task RestoreUserAsync()
+    public async Task RestoreUserAsync(Activity? activity)
+    {
+        using (await Lock.LockAsync())
+        {
+            activity?.AddEvent(new("Entered_AsyncLock"));
+
+            AuthorizedUser? user = await ReadUserAsync();
+            if (user != null)
+            {
+                await user.RefreshAsync();
+
+                _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", user.Token);
+                await user.Profile.RefreshAsync();
+                _authorizedUser.Value = user;
+                SaveUser();
+            }
+        }
+    }
+
+    public async ValueTask<AuthorizedUser?> ReadUserAsync()
     {
         string fileName = Path.Combine(Helper.AppRoot, "user.json");
         if (File.Exists(fileName))
         {
-            JsonNode? node;
-            using (StreamReader reader = File.OpenText(fileName))
-            {
-                string json = await reader.ReadToEndAsync();
-                node = JsonNode.Parse(json);
-            }
+            JsonNode? node = JsonNode.Parse(await File.ReadAllTextAsync(fileName));
+            DateTime lastWriteTime = File.GetLastWriteTimeUtc(fileName);
 
             if (node != null)
             {
@@ -236,16 +278,17 @@ public class BeutlApiApplication
                     && refreshToken != null
                     && expiration.HasValue)
                 {
-                    var user = new AuthorizedUser(new Profile(profile, this), new AuthResponse(expiration.Value, refreshToken, token), this, _httpClient);
-                    await user.RefreshAsync();
-
-                    _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", user.Token);
-                    await user.Profile.RefreshAsync();
-                    _authorizedUser.Value = user;
-                    SaveUser();
+                    return new AuthorizedUser(
+                        new Profile(profile, this),
+                        new AuthResponse(expiration.Value, refreshToken, token),
+                        this,
+                        _httpClient,
+                        lastWriteTime);
                 }
             }
         }
+
+        return null;
     }
 
     private static int GetRandomUnusedPort()
@@ -314,11 +357,6 @@ public class BeutlApiApplication
     {
         Stream? stream = typeof(BeutlApiApplication).Assembly.GetManifestResourceStream("Beutl.Api.Resources.index.html");
 
-        if (stream == null)
-        {
-            throw new Exception("Embedded resource not found.");
-        }
-
-        return stream;
+        return stream ?? throw new Exception("Embedded resource not found.");
     }
 }

@@ -2,33 +2,29 @@
 
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.Generators;
-using Avalonia.Controls.Presenters;
 using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.LogicalTree;
 
 using Beutl.Animation;
 using Beutl.Animation.Easings;
-using Beutl.ProjectSystem;
 using Beutl.Services;
-using Beutl.Utilities;
 using Beutl.ViewModels;
-
-using FluentAvalonia.UI.Controls;
 
 using Reactive.Bindings.Extensions;
 
 using Path = Avalonia.Controls.Shapes.Path;
+using Shape = Avalonia.Controls.Shapes.Shape;
 
 namespace Beutl.Views;
 
 public partial class GraphEditorView : UserControl
 {
+    private readonly CompositeDisposable _disposables = [];
     private bool _pressed;
     private TimeSpan _lastRightClickPoint;
     private TimeSpan _pointerFrame;
-    private CompositeDisposable _disposables = new();
 
     public GraphEditorView()
     {
@@ -118,7 +114,7 @@ public partial class GraphEditorView : UserControl
     protected override void OnLoaded(RoutedEventArgs e)
     {
         base.OnLoaded(e);
-        if(DataContext is GraphEditorViewModel viewModel)
+        if (DataContext is GraphEditorViewModel viewModel)
         {
             viewModel.ScrollOffset.Subscribe(offset => scroll.Offset = offset)
             .DisposeWith(_disposables);
@@ -306,22 +302,20 @@ public partial class GraphEditorView : UserControl
     private void OnControlPointPointerMoved(object? sender, PointerEventArgs e)
     {
         if (_cPointPressed
-            && sender is Path { DataContext: GraphEditorKeyFrameViewModel viewModel, Tag: string tag } shape)
+            && sender is Shape { DataContext: GraphEditorKeyFrameViewModel viewModel, Tag: string tag })
         {
             Point position = new(e.GetPosition(views).X, e.GetPosition(grid).Y);
             position = position.WithX(Math.Clamp(position.X, viewModel.Left.Value, viewModel.Right.Value));
             Point delta = position - _cPointstart;
             _cPointstart = position;
-            bool result = tag switch
+            switch (tag)
             {
-                "ControlPoint1" => viewModel.UpdateControlPoint1(viewModel.ControlPoint1.Value + delta),
-                "ControlPoint2" => viewModel.UpdateControlPoint2(viewModel.ControlPoint2.Value + delta),
-                _ => false,
-            };
-
-            if (!result)
-            {
-                _cPointPressed = false;
+                case "ControlPoint1":
+                    viewModel.UpdateControlPoint1(viewModel.ControlPoint1.Value + delta);
+                    break;
+                case "ControlPoint2":
+                    viewModel.UpdateControlPoint2(viewModel.ControlPoint2.Value + delta);
+                    break;
             }
 
             e.Handled = true;
@@ -331,7 +325,7 @@ public partial class GraphEditorView : UserControl
     private void OnControlPointPointerPressed(object? sender, PointerPressedEventArgs e)
     {
         if (DataContext is GraphEditorViewModel viewModel
-            && sender is Path
+            && sender is Shape
             {
                 Tag: string tag,
                 DataContext: GraphEditorKeyFrameViewModel
@@ -340,6 +334,14 @@ public partial class GraphEditorView : UserControl
                 }
             } shape)
         {
+            if (!e.KeyModifiers.HasFlag(KeyModifiers.Alt)
+                && shape.GetLogicalSiblings().OfType<Path>().FirstOrDefault(v => v.Name == "KeyTimeIcon") is Path ki
+                && ki.InputHitTest(e.GetPosition(ki)) == ki)
+            {
+                ki.RaiseEvent(e);
+                return;
+            }
+
             PointerPoint point = e.GetCurrentPoint(grid);
 
             if (point.Properties.IsLeftButtonPressed)
@@ -361,7 +363,7 @@ public partial class GraphEditorView : UserControl
     private void OnControlPointPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
         if (DataContext is GraphEditorViewModel viewModel
-            && sender is Path { DataContext: GraphEditorKeyFrameViewModel itemViewModel, Tag: string tag })
+            && sender is Shape { DataContext: GraphEditorKeyFrameViewModel itemViewModel, Tag: string tag })
         {
             switch (tag)
             {

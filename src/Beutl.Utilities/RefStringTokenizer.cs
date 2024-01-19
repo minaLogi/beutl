@@ -4,8 +4,6 @@ namespace Beutl.Utilities;
 
 public ref struct RefStringTokenizer
 {
-    private const char DefaultSeparatorChar = ',';
-
     private readonly ReadOnlySpan<char> _s;
     private readonly int _length;
     private readonly char _separator;
@@ -16,12 +14,12 @@ public ref struct RefStringTokenizer
     private int _tokenLength;
 
     public RefStringTokenizer(ReadOnlySpan<char> s, IFormatProvider formatProvider, string exceptionMessage = "")
-        : this(s, GetSeparatorFromFormatProvider(formatProvider), exceptionMessage)
+        : this(s, TokenizerHelper.GetSeparatorFromFormatProvider(formatProvider), exceptionMessage)
     {
         _formatProvider = formatProvider;
     }
 
-    public RefStringTokenizer(ReadOnlySpan<char> s, char separator = DefaultSeparatorChar, string exceptionMessage = "")
+    public RefStringTokenizer(ReadOnlySpan<char> s, char separator = TokenizerHelper.DefaultSeparatorChar, string exceptionMessage = "")
     {
         _s = s;
         _length = s.Length;
@@ -38,9 +36,9 @@ public ref struct RefStringTokenizer
         }
     }
 
-    public ReadOnlySpan<char> CurrentToken => _tokenIndex < 0 ? default : _s.Slice(_tokenIndex, _tokenLength);
+    public readonly ReadOnlySpan<char> CurrentToken => _tokenIndex < 0 ? default : _s.Slice(_tokenIndex, _tokenLength);
 
-    public void Dispose()
+    public readonly void Dispose()
     {
         if (_index != _length)
         {
@@ -271,19 +269,6 @@ public ref struct RefStringTokenizer
         }
     }
 
-    private FormatException GetFormatException() =>
+    private readonly FormatException GetFormatException() =>
         _exceptionMessage != null ? new FormatException(_exceptionMessage) : new FormatException();
-
-    private static char GetSeparatorFromFormatProvider(IFormatProvider provider)
-    {
-        char c = DefaultSeparatorChar;
-
-        var formatInfo = NumberFormatInfo.GetInstance(provider);
-        if (formatInfo.NumberDecimalSeparator.Length > 0 && c == formatInfo.NumberDecimalSeparator[0])
-        {
-            c = ';';
-        }
-
-        return c;
-    }
 }

@@ -95,7 +95,7 @@ public sealed partial class PackageReleasesPage : UserControl
             if (await dialog.ShowAsync() == ContentDialogResult.Primary
                 && dialogViewModel.Result != null)
             {
-                viewModel.Items.OrderedAddDescending(dialogViewModel.Result, x => x.Version.Value);
+                viewModel.Items.OrderedAddDescending(dialogViewModel.Result, x => ((Release)x).Version.Value);
             }
         }
     }
@@ -133,7 +133,7 @@ public sealed partial class PackageReleasesPage : UserControl
 
             if (await dialog.ShowAsync() == ContentDialogResult.Primary)
             {
-                frame.RemoveAllStack(item => item is ReleasePageViewModel p && p.Release.Id == release.Id);
+                frame.RemoveAllStack(item => item is Release p && p.Id == release.Id);
 
                 await viewModel.DeleteReleaseAsync(release);
                 frame.GoBack();

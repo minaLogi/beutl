@@ -1,6 +1,7 @@
 ﻿using System.ComponentModel;
 using System.Runtime.InteropServices;
 
+using Beutl.Animation;
 using Beutl.Media;
 using Beutl.NodeTree.Nodes.Group;
 using Beutl.Rendering;
@@ -82,6 +83,7 @@ public class NodeGroup : NodeTreeModel
         }
     }
 
+#pragma warning disable CA1822 // メンバーを static に設定します
     public void Evaluate(NodeEvaluationContext parentContext, object state)
     {
         if (state is List<NodeEvaluationContext[]> contexts)
@@ -100,7 +102,7 @@ public class NodeGroup : NodeTreeModel
         }
     }
 
-    public object InitializeForState(IRenderer renderer)
+    public object InitializeForState(IRenderer renderer, IClock clock)
     {
         var evalContexts = new List<NodeEvaluationContext[]>();
 
@@ -108,12 +110,12 @@ public class NodeGroup : NodeTreeModel
         {
             var stack = new Stack<NodeEvaluationContext>();
             BuildNode(lastNode, stack);
-            NodeEvaluationContext[] array = stack.ToArray();
+            NodeEvaluationContext[] array = [.. stack];
 
             evalContexts.Add(array);
             foreach (NodeEvaluationContext item in array)
             {
-                item.Clock = renderer.Clock;
+                item.Clock = clock;
                 item.Renderer = renderer;
                 item.List = array;
                 item.Node.InitializeForContext(item);
@@ -138,6 +140,7 @@ public class NodeGroup : NodeTreeModel
             contexts.Clear();
         }
     }
+#pragma warning restore CA1822 // メンバーを static に設定します
 
     private void BuildNode(Node node, Stack<NodeEvaluationContext> stack)
     {

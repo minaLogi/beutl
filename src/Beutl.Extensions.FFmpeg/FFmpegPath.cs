@@ -1,6 +1,8 @@
 ﻿using System.Diagnostics;
 using System.Reflection;
+using System.Text;
 
+using Beutl.Extensions.FFmpeg.Properties;
 using Beutl.Services;
 
 using FFmpeg.AutoGen;
@@ -22,7 +24,7 @@ public static class FFmpegLoader
 
     static FFmpegLoader()
     {
-        s_defaultFFmpegPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".beutl", "ffmpeg");
+        s_defaultFFmpegPath = Path.Combine(BeutlEnvironment.GetHomeDirectoryPath(), "ffmpeg");
         s_defaultFFmpegExePath = Path.Combine(s_defaultFFmpegPath, OperatingSystem.IsWindows() ? "ffmpeg.exe" : "ffmpeg");
     }
 
@@ -33,32 +35,35 @@ public static class FFmpegLoader
 
         try
         {
-            DynamicallyLoadedBindings.ThrowErrorIfFunctionNotFound = true;
             ffmpeg.RootPath = GetRootPath();
+            var sb = new StringBuilder();
+            sb.AppendLine("Versions:");
 
             foreach (KeyValuePair<string, int> item in ffmpeg.LibraryVersionMap)
             {
-                s_logger.LogInformation("{LibraryName} {Version}", item.Key, item.Value);
+                sb.AppendLine($"  {item.Key}: {item.Value}");
             }
 
-            s_logger.LogInformation("avcodec_license() {License}", ffmpeg.avcodec_license());
-            s_logger.LogInformation("avdevice_license() {License}", ffmpeg.avdevice_license());
-            s_logger.LogInformation("avfilter_license() {License}", ffmpeg.avfilter_license());
-            s_logger.LogInformation("avformat_license() {License}", ffmpeg.avformat_license());
-            s_logger.LogInformation("avutil_license() {License}", ffmpeg.avutil_license());
-            s_logger.LogInformation("postproc_license() {License}", ffmpeg.postproc_license());
-            s_logger.LogInformation("swresample_license() {License}", ffmpeg.swresample_license());
-            s_logger.LogInformation("swscale_license() {License}", ffmpeg.swscale_license());
+            sb.AppendLine("Licenses:");
+            sb.AppendLine($"  avcodec: {ffmpeg.avcodec_license()}");
+            sb.AppendLine($"  avdevice: {ffmpeg.avdevice_license()}");
+            sb.AppendLine($"  avfilter: {ffmpeg.avfilter_license()}");
+            sb.AppendLine($"  avformat: {ffmpeg.avformat_license()}");
+            sb.AppendLine($"  avutil: {ffmpeg.avutil_license()}");
+            sb.AppendLine($"  postproc: {ffmpeg.postproc_license()}");
+            sb.AppendLine($"  swresample: {ffmpeg.swresample_license()}");
+            sb.AppendLine($"  swscale: {ffmpeg.swscale_license()}");
+            s_logger.LogInformation("{VersionAndLicense}", sb.ToString());
 
             s_isInitialized = true;
         }
         catch
         {
             NotificationService.ShowError(
-                "FFmpeg error",
-                "FFmpegがインストールされているかを確認してください。",
+                Strings.FFmpegError,
+                Strings.Make_sure_you_have_FFmpeg_installed,
                 onActionButtonClick: OpenDocumentUrl,
-                actionButtonText: "ドキュメントを開く");
+                actionButtonText: Beutl.Language.Strings.OpenDocument);
 
             throw;
         }

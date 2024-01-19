@@ -1,9 +1,8 @@
-﻿using Avalonia.Controls;
-using Avalonia.Interactivity;
-using Avalonia.Styling;
+﻿using Avalonia.Interactivity;
 
 using Beutl.Api.Objects;
 using Beutl.ViewModels.Dialogs;
+
 using FluentAvalonia.UI.Controls;
 
 namespace Beutl.Views.Dialogs;
@@ -19,7 +18,7 @@ public partial class SelectImageAsset : ContentDialog
 
     private async void UploadImage_Click(object? sender, RoutedEventArgs e)
     {
-        if (DataContext is SelectImageAssetViewModel viewModel && VisualRoot is Window parent)
+        if (DataContext is SelectImageAssetViewModel viewModel)
         {
             CreateAssetViewModel dialogViewModel = viewModel.CreateAssetViewModel();
             var dialog = new CreateAsset
@@ -27,7 +26,6 @@ public partial class SelectImageAsset : ContentDialog
                 DataContext = dialogViewModel,
             };
 
-            Hide();
             await dialog.ShowAsync();
 
             if (dialogViewModel.Result is Asset asset)
@@ -41,8 +39,6 @@ public partial class SelectImageAsset : ContentDialog
                     viewModel.SelectedItem.Value = itemViewModel;
                 }
             }
-
-            await ShowAsync();
         }
     }
 }

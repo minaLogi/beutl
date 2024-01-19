@@ -2,6 +2,7 @@
 using Beutl.Extensibility;
 using Beutl.Media;
 using Beutl.Rendering;
+using Beutl.Serialization;
 
 namespace Beutl.Operation;
 
@@ -12,6 +13,7 @@ public interface ISourceOperator : IAffectsRender
     ICoreList<IAbstractProperty> Properties { get; }
 }
 
+[DummyType(typeof(DummySourceOperator))]
 public class SourceOperator : Hierarchical, ISourceOperator
 {
     public static readonly CoreProperty<ICoreList<IAbstractProperty>> PropertiesProperty;
@@ -47,6 +49,11 @@ public class SourceOperator : Hierarchical, ISourceOperator
 
     public event EventHandler<RenderInvalidatedEventArgs>? Invalidated;
 
+    public virtual EvaluationTarget GetEvaluationTarget()
+    {
+        return EvaluationTarget.Unknown;
+    }
+
     public virtual void InitializeForContext(OperatorEvaluationContext context)
     {
     }
@@ -68,9 +75,6 @@ public class SourceOperator : Hierarchical, ISourceOperator
                     context.AddFlowRenderable(renderable);
                 }
                 break;
-            case ISourceHandler handler:
-                handler.Handle(context.FlowRenderables, context.Clock);
-                break;
             default:
                 break;
         }
@@ -82,6 +86,22 @@ public class SourceOperator : Hierarchical, ISourceOperator
 
     public virtual void Exit()
     {
+    }
+
+    public virtual bool HasOriginalLength()
+    {
+        return false;
+    }
+    
+    public virtual bool TryGetOriginalLength(out TimeSpan timeSpan)
+    {
+        timeSpan = default;
+        return false;
+    }
+
+    public virtual IRecordableCommand? OnSplit(bool backward, TimeSpan startDelta, TimeSpan lengthDelta)
+    {
+        return null;
     }
 
     protected void RaiseInvalidated(RenderInvalidatedEventArgs args)

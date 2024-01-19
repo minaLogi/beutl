@@ -6,22 +6,29 @@ using SkiaSharp;
 
 namespace Beutl.Graphics.Rendering;
 
-public sealed class FilterEffectNode : ContainerNode, ISupportRenderCache
+public sealed class FilterEffectNode(FilterEffect filterEffect) : ContainerNode, ISupportRenderCache
 {
     private FilterEffectContext? _prevContext;
 
-    public FilterEffectNode(FilterEffect filterEffect)
-    {
-        FilterEffect = filterEffect;
-    }
-
-    public FilterEffect FilterEffect { get; }
+    public FilterEffect FilterEffect { get; } = filterEffect;
 
     protected override void OnDispose(bool disposing)
     {
         base.OnDispose(disposing);
         _prevContext?.Dispose();
         _prevContext = null;
+    }
+
+    public override bool HitTest(Point point)
+    {
+        if (_prevContext?.CountItems() > 0)
+        {
+            return Bounds.Contains(point);
+        }
+        else
+        {
+            return base.HitTest(point);
+        }
     }
 
     public bool Equals(FilterEffect filterEffect)

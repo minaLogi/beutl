@@ -13,8 +13,6 @@ public interface IRenderer : IDisposable, IImmediateCanvasFactory
 
     PixelSize FrameSize { get; }
 
-    int SampleRate { get; }
-
     IClock Clock { get; }
 
     bool DrawFps { get; set; }
@@ -23,17 +21,16 @@ public interface IRenderer : IDisposable, IImmediateCanvasFactory
 
     bool IsGraphicsRendering { get; }
 
-    bool IsAudioRendering { get; }
-
     event EventHandler<TimeSpan> RenderInvalidated;
 
-    RenderResult RenderGraphics(TimeSpan timeSpan);
+    Drawable? HitTest(Point point);
 
-    RenderResult RenderAudio(TimeSpan timeSpan);
+    [Obsolete("Use Render(TimeSpan) and Snapshot() instead of RenderGraphics.")]
+    Bitmap<Bgra8888>? RenderGraphics(TimeSpan timeSpan);
 
-    RenderResult Render(TimeSpan timeSpan);
+    bool Render(TimeSpan timeSpan);
+
+    Bitmap<Bgra8888> Snapshot();
 
     void RaiseInvalidated(TimeSpan timeSpan);
-
-    public record struct RenderResult(Bitmap<Bgra8888>? Bitmap = null, Pcm<Stereo32BitFloat>? Audio = null);
 }

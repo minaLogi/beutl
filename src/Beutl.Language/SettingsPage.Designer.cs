@@ -61,11 +61,29 @@ namespace Beutl.Language {
         }
         
         /// <summary>
+        ///   Accent color に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string AccentColor {
+            get {
+                return ResourceManager.GetString("AccentColor", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   Add file extension に類似しているローカライズされた文字列を検索します。
         /// </summary>
         public static string Add_file_extension {
             get {
                 return ResourceManager.GetString("Add_file_extension", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Add property to hide に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string AddPropertyToHide {
+            get {
+                return ResourceManager.GetString("AddPropertyToHide", resourceCulture);
             }
         }
         
@@ -79,11 +97,47 @@ namespace Beutl.Language {
         }
         
         /// <summary>
+        ///   Automatically adjusts scene duration に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string AutoAdjustSceneDuration {
+            get {
+                return ResourceManager.GetString("AutoAdjustSceneDuration", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   When elements are added, if the duration of the scene needs to be adjusted, it will automatically do so. に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string AutoAdjustSceneDuration_Description {
+            get {
+                return ResourceManager.GetString("AutoAdjustSceneDuration_Description", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Packages に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string BeutlPackageFile {
+            get {
+                return ResourceManager.GetString("BeutlPackageFile", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   Change account settings に類似しているローカライズされた文字列を検索します。
         /// </summary>
         public static string ChangeAccountSettings {
             get {
                 return ResourceManager.GetString("ChangeAccountSettings", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Change the primary properties to be hidden に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string ChangePrimaryPropertiesToBeHidden {
+            get {
+                return ResourceManager.GetString("ChangePrimaryPropertiesToBeHidden", resourceCulture);
             }
         }
         
@@ -106,6 +160,33 @@ namespace Beutl.Language {
         }
         
         /// <summary>
+        ///   Custom color に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string CustomColor {
+            get {
+                return ResourceManager.GetString("CustomColor", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Decoder Priority に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string DecoderPriority {
+            get {
+                return ResourceManager.GetString("DecoderPriority", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   You can change the priority order of decoders. The upper decoder has priority. に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string DecoderPriority_Description {
+            get {
+                return ResourceManager.GetString("DecoderPriority_Description", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   Device Infomation に類似しているローカライズされた文字列を検索します。
         /// </summary>
         public static string DeviceInfomation {
@@ -124,11 +205,65 @@ namespace Beutl.Language {
         }
         
         /// <summary>
+        ///   Editor settings に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string EditorSettings {
+            get {
+                return ResourceManager.GetString("EditorSettings", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Enable pointer lock に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string EnablePointerLockInProperty {
+            get {
+                return ResourceManager.GetString("EnablePointerLockInProperty", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Hides the cursor during drag operations in the Property Editor. (Windows only) に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string EnablePointerLockInProperty_Description {
+            get {
+                return ResourceManager.GetString("EnablePointerLockInProperty_Description", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Font Files に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string FontFiles {
+            get {
+                return ResourceManager.GetString("FontFiles", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   Gpu Infomation に類似しているローカライズされた文字列を検索します。
         /// </summary>
         public static string GpuInfomation {
             get {
                 return ResourceManager.GetString("GpuInfomation", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Hide primary properties に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string HidePrimaryProperties {
+            get {
+                return ResourceManager.GetString("HidePrimaryProperties", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Primary properties can be set by adding &apos;Source Operation&apos;. Applies after the end of the program. に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string HidePrimaryProperties_Description {
+            get {
+                return ResourceManager.GetString("HidePrimaryProperties_Description", resourceCulture);
             }
         }
         
@@ -187,6 +322,34 @@ namespace Beutl.Language {
         }
         
         /// <summary>
+        ///   Primary properties に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string PrimaryProperties {
+            get {
+                return ResourceManager.GetString("PrimaryProperties", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Display precise boundaries に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string ShowExactBoundaries {
+            get {
+                return ResourceManager.GetString("ShowExactBoundaries", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Displays the boundaries of elements accurately during preview.
+        ///Enabling this setting may make the border invisible. に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string ShowExactBoundaries_Description {
+            get {
+                return ResourceManager.GetString("ShowExactBoundaries_Description", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   Sign in に類似しているローカライズされた文字列を検索します。
         /// </summary>
         public static string SignIn {
@@ -219,6 +382,15 @@ namespace Beutl.Language {
         public static string SignOut {
             get {
                 return ResourceManager.GetString("SignOut", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Some settings have been moved. に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string SomeSettingsHaveBeenMoved {
+            get {
+                return ResourceManager.GetString("SomeSettingsHaveBeenMoved", resourceCulture);
             }
         }
         
@@ -259,6 +431,152 @@ namespace Beutl.Language {
         }
         
         /// <summary>
+        ///   Telemetry に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string Telemetry {
+            get {
+                return ResourceManager.GetString("Telemetry", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   All Errors に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string Telemetry_All_Errors {
+            get {
+                return ResourceManager.GetString("Telemetry_All_Errors", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   APIクライアント に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string Telemetry_Beutl_Api_Client {
+            get {
+                return ResourceManager.GetString("Telemetry_Beutl_Api_Client", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Application に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string Telemetry_Beutl_Application {
+            get {
+                return ResourceManager.GetString("Telemetry_Beutl_Application", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Logging に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string Telemetry_Beutl_Logging {
+            get {
+                return ResourceManager.GetString("Telemetry_Beutl_Logging", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Package Management に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string Telemetry_Beutl_PackageManagement {
+            get {
+                return ResourceManager.GetString("Telemetry_Beutl_PackageManagement", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Display and operation に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string Telemetry_Beutl_ViewTracking {
+            get {
+                return ResourceManager.GetString("Telemetry_Beutl_ViewTracking", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   To improve Beutl, we collect anonymous usage data.
+        ///For more information, please refer to the following pages. に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string Telemetry_Description {
+            get {
+                return ResourceManager.GetString("Telemetry_Description", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Collect all errors that occur. に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string Telemetry_Description_All_Errors {
+            get {
+                return ResourceManager.GetString("Telemetry_Description_All_Errors", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Collect API call times used by extension store and account functions. に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string Telemetry_Description_Beutl_Api_Client {
+            get {
+                return ResourceManager.GetString("Telemetry_Description_Beutl_Api_Client", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   The following information is collected to improve application performance
+        ///Time the application was started, elapsed time of operation, and number of items retrieved by the API に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string Telemetry_Description_Beutl_Application {
+            get {
+                return ResourceManager.GetString("Telemetry_Description_Beutl_Application", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   More detailed usage information is collected. The logs sent are also stored under the &quot;.beutl/log&quot; directory. に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string Telemetry_Description_Beutl_Logging {
+            get {
+                return ResourceManager.GetString("Telemetry_Description_Beutl_Logging", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Collect the time taken to install and load extensions. に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string Telemetry_Description_Beutl_PackageManagement {
+            get {
+                return ResourceManager.GetString("Telemetry_Description_Beutl_PackageManagement", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Collect what features users view or use. に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string Telemetry_Description_Beutl_ViewTracking {
+            get {
+                return ResourceManager.GetString("Telemetry_Description_Beutl_ViewTracking", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Settings about the data to be collected に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string Telemetry_ShortDescription {
+            get {
+                return ResourceManager.GetString("Telemetry_ShortDescription", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Text Files に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string TextFiles {
+            get {
+                return ResourceManager.GetString("TextFiles", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   The following characters are not allowed (&quot; &gt; &lt; | : ? * \ /) に類似しているローカライズされた文字列を検索します。
         /// </summary>
         public static string The_following_characters_are_not_allowed {
@@ -282,6 +600,24 @@ namespace Beutl.Language {
         public static string This_file_extension_already_exists {
             get {
                 return ResourceManager.GetString("This_file_extension_already_exists", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Use custom accent color に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string UseCustomAccentColor {
+            get {
+                return ResourceManager.GetString("UseCustomAccentColor", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Zip に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string Zip {
+            get {
+                return ResourceManager.GetString("Zip", resourceCulture);
             }
         }
     }

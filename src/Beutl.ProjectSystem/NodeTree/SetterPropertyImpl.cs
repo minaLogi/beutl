@@ -3,11 +3,12 @@
 using Beutl.Animation;
 using Beutl.Extensibility;
 using Beutl.Reactive;
+using Beutl.Serialization;
 using Beutl.Styling;
 
 namespace Beutl.NodeTree;
 
-public sealed class SetterPropertyImpl<T> : IAbstractAnimatableProperty<T>
+public sealed class SetterPropertyImpl<T>(Setter<T> setter, Type implementedType) : IAbstractAnimatableProperty<T>
 {
     private sealed class AnimationObservable : LightweightObservableBase<IAnimation<T>?>
     {
@@ -17,6 +18,7 @@ public sealed class SetterPropertyImpl<T> : IAbstractAnimatableProperty<T>
         public AnimationObservable(Setter<T> setter)
         {
             _setter = setter;
+            _prevAnimation = setter.Animation;
         }
 
         protected override void Subscribed(IObserver<IAnimation<T>?> observer, bool first)
@@ -45,17 +47,9 @@ public sealed class SetterPropertyImpl<T> : IAbstractAnimatableProperty<T>
         }
     }
 
-    public SetterPropertyImpl(Setter<T> setter, Type implementedType)
-    {
-        Property = setter.Property;
-        Setter = setter;
-        ImplementedType = implementedType;
-        ObserveAnimation = new AnimationObservable(setter);
-    }
+    public CoreProperty<T> Property { get; } = setter.Property;
 
-    public CoreProperty<T> Property { get; }
-
-    public Setter<T> Setter { get; }
+    public Setter<T> Setter { get; } = setter;
 
     public IAnimation<T>? Animation
     {
@@ -63,9 +57,9 @@ public sealed class SetterPropertyImpl<T> : IAbstractAnimatableProperty<T>
         set => Setter.Animation = value;
     }
 
-    public IObservable<IAnimation<T>?> ObserveAnimation { get; }
+    public IObservable<IAnimation<T>?> ObserveAnimation { get; } = new AnimationObservable(setter);
 
-    public Type ImplementedType { get; }
+    public Type ImplementedType { get; } = implementedType;
 
     public Type PropertyType => Property.PropertyType;
 
@@ -97,6 +91,7 @@ public sealed class SetterPropertyImpl<T> : IAbstractAnimatableProperty<T>
         Setter.Value = value;
     }
 
+    [ObsoleteSerializationApi]
     public void WriteToJson(JsonObject json)
     {
         json[nameof(Property)] = Property.Name;
@@ -105,6 +100,7 @@ public sealed class SetterPropertyImpl<T> : IAbstractAnimatableProperty<T>
         json[nameof(Setter)] = StyleSerializer.ToJson(Setter, ImplementedType).Item2;
     }
 
+    [ObsoleteSerializationApi]
     public void ReadFromJson(JsonObject json)
     {
         if (json.TryGetPropertyValue(nameof(Setter), out JsonNode? setterNode)
@@ -125,5 +121,29 @@ public sealed class SetterPropertyImpl<T> : IAbstractAnimatableProperty<T>
     public object? GetDefaultValue()
     {
         return Property.GetMetadata<ICorePropertyMetadata>(ImplementedType).GetDefaultValue();
+    }
+
+    public void Serialize(ICoreSerializationContext context)
+    {
+        context.SetValue(nameof(Property), Property.Name);
+        context.SetValue("Target", TypeFormat.ToString(ImplementedType));
+
+        context.SetValue(nameof(Setter), StyleSerializer.ToJson(Setter, ImplementedType).Item2);
+    }
+
+    public void Deserialize(ICoreSerializationContext context)
+    {
+        if (context.GetValue<JsonNode>(nameof(Setter)) is { } setterNode)
+        {
+            if (StyleSerializer.ToSetter(setterNode, Property.Name, ImplementedType) is Setter<T> setter)
+            {
+                if (setter.Animation != null)
+                {
+                    Setter.Animation = setter.Animation;
+                }
+
+                Setter.Value = setter.Value;
+            }
+        }
     }
 }

@@ -9,8 +9,10 @@ using Avalonia.Input;
 using Avalonia.Input.Platform;
 
 using Beutl.Animation;
+using Beutl.Commands;
+using Beutl.Configuration;
+using Beutl.Media;
 using Beutl.Models;
-using Beutl.Operation;
 using Beutl.Operators.Configure;
 using Beutl.ProjectSystem;
 using Beutl.Reactive;
@@ -42,8 +44,9 @@ public interface ITimelineOptionsProvider
 public sealed class TimelineViewModel : IToolContext
 {
     private readonly ILogger _logger = Log.ForContext<TimelineViewModel>();
-    private readonly CompositeDisposable _disposables = new();
+    private readonly CompositeDisposable _disposables = [];
     private readonly Subject<LayerHeaderViewModel> _layerHeightChanged = new();
+    private readonly Dictionary<int, TrackedLayerTopObservable> _trackerCache = [];
 
     public TimelineViewModel(EditViewModel editViewModel)
     {
@@ -74,49 +77,41 @@ public sealed class TimelineViewModel : IToolContext
             .Subscribe(v => Scene.CacheOptions = Scene.CacheOptions with { IsEnabled = v })
             .AddTo(_disposables);
 
-        AddLayer.Subscribe(item =>
-        {
-            var sLayer = new Element()
-            {
-                Start = item.Start,
-                Length = item.Length,
-                ZIndex = item.Layer,
-                FileName = RandomFileNameGenerator.Generate(Path.GetDirectoryName(Scene.FileName)!, Constants.ElementFileExtension)
-            };
-
-            if (item.InitialOperator != null)
-            {
-                //Todo: レイヤーのアクセントカラー
-                //sLayer.AccentColor = item.InitialOperator.AccentColor;
-                sLayer.Operation.AddChild((SourceOperator)Activator.CreateInstance(item.InitialOperator)!).Do();
-            }
-
-            sLayer.Save(sLayer.FileName);
-            Scene.AddChild(sLayer).DoAndRecord(CommandRecorder.Default);
-        }).AddTo(_disposables);
+        AddElement.Subscribe(editViewModel.AddElement).AddTo(_disposables);
 
         TimelineOptions options = editViewModel.Options.Value;
         LayerHeaders.AddRange(Enumerable.Range(0, options.MaxLayerCount).Select(num => new LayerHeaderViewModel(num, this)));
-        Scene.Children.ForEachItem(
+        if (Scene.Children.Count > 0)
+        {
+            AddLayerHeaders(Scene.Children.Max(i => i.ZIndex) + 1);
+            var items = new ElementViewModel[Scene.Children.Count];
+            Parallel.ForEach(
+                Scene.Children,
+                (item, _, idx) => items[idx] = new ElementViewModel(item, this));
+            Elements.AddRange(items);
+        }
+
+        Scene.Children.TrackCollectionChanged(
             (idx, item) =>
             {
                 AddLayerHeaders(item.ZIndex + 1);
-                Layers.Insert(idx, new ElementViewModel(item, this));
+                Elements.Insert(idx, new ElementViewModel(item, this));
             },
             (idx, _) =>
             {
-                ElementViewModel layer = Layers[idx];
-                this.GetService<ISupportCloseAnimation>()?.Close(layer.Model);
-                layer.Dispose();
-                Layers.RemoveAt(idx);
+                ElementViewModel element = Elements[idx];
+                this.GetService<ISupportCloseAnimation>()?.Close(element.Model);
+                Elements.RemoveAt(idx);
+                element.Dispose();
             },
             () =>
             {
-                foreach (ElementViewModel? item in Layers.GetMarshal().Value)
+                ElementViewModel[] tmp = [.. Elements];
+                Elements.Clear();
+                foreach (ElementViewModel? item in Elements.GetMarshal().Value)
                 {
                     item.Dispose();
                 }
-                Layers.Clear();
             })
             .AddTo(_disposables);
 
@@ -124,8 +119,15 @@ public sealed class TimelineViewModel : IToolContext
             .DistinctUntilChanged()
             .Subscribe(TryApplyLayerCount);
 
+        AdjustDurationToPointer.Subscribe(OnAdjustDurationToPointer);
+        AdjustDurationToCurrent.Subscribe(OnAdjustDurationToCurrent);
+        EditorConfig editorConfig = GlobalConfiguration.Instance.EditorConfig;
+
+        AutoAdjustSceneDuration = editorConfig.GetObservable(EditorConfig.AutoAdjustSceneDurationProperty).ToReactiveProperty();
+        AutoAdjustSceneDuration.Subscribe(b => editorConfig.AutoAdjustSceneDuration = b);
+
         // Todo: 設定からショートカットを変更できるようにする。
-        KeyBindings = new List<KeyBinding>();
+        KeyBindings = [];
         PlatformHotkeyConfiguration? keyConf = Application.Current?.PlatformSettings?.HotkeyConfiguration;
         if (keyConf != null)
         {
@@ -145,6 +147,24 @@ public sealed class TimelineViewModel : IToolContext
         }
     }
 
+    private void OnAdjustDurationToPointer()
+    {
+        int rate = Scene.FindHierarchicalParent<Project>().GetFrameRate();
+        TimeSpan time = ClickedFrame + TimeSpan.FromSeconds(1d / rate);
+
+        var command = new ChangePropertyCommand<TimeSpan>(Scene, Scene.DurationProperty, time, Scene.Duration);
+        command.DoAndRecord(CommandRecorder.Default);
+    }
+
+    private void OnAdjustDurationToCurrent()
+    {
+        int rate = Scene.FindHierarchicalParent<Project>().GetFrameRate();
+        TimeSpan time = Scene.CurrentFrame + TimeSpan.FromSeconds(1d / rate);
+
+        var command = new ChangePropertyCommand<TimeSpan>(Scene, Scene.DurationProperty, time, Scene.Duration);
+        command.DoAndRecord(CommandRecorder.Default);
+    }
+
     public Scene Scene { get; private set; }
 
     public PlayerViewModel Player { get; private set; }
@@ -159,15 +179,29 @@ public sealed class TimelineViewModel : IToolContext
 
     public ReadOnlyReactivePropertySlim<Thickness> EndingBarMargin { get; }
 
-    public ReactiveCommand<ElementDescription> AddLayer { get; } = new();
+    public ReactiveCommand<ElementDescription> AddElement { get; } = new();
 
-    public CoreList<ElementViewModel> Layers { get; } = new();
+    [Obsolete("Use AddElement property instead.")]
+    public ReactiveCommand<ElementDescription> AddLayer => AddElement;
 
-    public CoreList<InlineAnimationLayerViewModel> Inlines { get; } = new();
+    public CoreList<ElementViewModel> Elements { get; } = [];
 
-    public CoreList<LayerHeaderViewModel> LayerHeaders { get; } = new();
+    [Obsolete("Use Elements property instead.")]
+    public CoreList<ElementViewModel> Layers => Elements;
+
+    public CoreList<InlineAnimationLayerViewModel> Inlines { get; } = [];
+
+    public CoreList<LayerHeaderViewModel> LayerHeaders { get; } = [];
 
     public ReactiveCommand Paste { get; } = new();
+
+    public ReactiveCommand<(TimeRange Range, int ZIndex)> ScrollTo { get; } = new();
+
+    public ReactiveCommandSlim AdjustDurationToPointer { get; } = new();
+
+    public ReactiveCommandSlim AdjustDurationToCurrent { get; } = new();
+
+    public ReactiveProperty<bool> AutoAdjustSceneDuration { get; }
 
     public TimeSpan ClickedFrame { get; set; }
 
@@ -190,7 +224,7 @@ public sealed class TimelineViewModel : IToolContext
     public void Dispose()
     {
         _disposables.Dispose();
-        foreach (ElementViewModel? item in Layers.GetMarshal().Value)
+        foreach (ElementViewModel? item in Elements.GetMarshal().Value)
         {
             item.Dispose();
         }
@@ -203,11 +237,21 @@ public sealed class TimelineViewModel : IToolContext
             item.Dispose();
         }
 
+        if (_trackerCache.Values.Count > 0)
+        {
+            // ToArrayの理由は
+            // TrackedLayerTopObservable.DisposeでDeinitializeが呼び出され、_trackerCacheが変更されるので
+            foreach (TrackedLayerTopObservable? item in _trackerCache.Values.ToArray())
+            {
+                item.Dispose();
+            }
+        }
+
         _layerHeightChanged.Dispose();
 
         Inlines.Clear();
         LayerHeaders.Clear();
-        Layers.Clear();
+        Elements.Clear();
         Scene = null!;
         Player = null!;
         EditorContext = null!;
@@ -274,7 +318,7 @@ public sealed class TimelineViewModel : IToolContext
 
     public void ReadFromJson(JsonObject json)
     {
-        if (json.TryGetPropertyValue(nameof(LayerHeaders), out var layersNode)
+        if (json.TryGetPropertyValue(nameof(LayerHeaders), out JsonNode? layersNode)
             && layersNode is JsonArray layersArray)
         {
             foreach ((LayerHeaderViewModel layer, JsonObject item) in layersArray.OfType<JsonObject>()
@@ -399,7 +443,7 @@ public sealed class TimelineViewModel : IToolContext
         {
             if (item.Property.Animation is KeyFrameAnimation { Id: Guid anmId })
             {
-                Guid elementId = item.Layer.Model.Id;
+                Guid elementId = item.Element.Model.Id;
 
                 inlines.Add(new JsonObject
                 {
@@ -412,10 +456,10 @@ public sealed class TimelineViewModel : IToolContext
         json[nameof(Inlines)] = inlines;
     }
 
-    public void AttachInline(IAbstractAnimatableProperty property, Element layer)
+    public void AttachInline(IAbstractAnimatableProperty property, Element element)
     {
-        if (!Inlines.Any(x => x.Layer.Model == layer && x.Property == property)
-            && Layers.FirstOrDefault(x => x.Model == layer) is { } viewModel)
+        if (!Inlines.Any(x => x.Element.Model == element && x.Property == property)
+            && GetViewModelFor(element) is { } viewModel)
         {
             // タイムラインのタブを開く
             Type type = typeof(InlineAnimationLayerViewModel<>).MakeGenericType(property.PropertyType);
@@ -440,7 +484,21 @@ public sealed class TimelineViewModel : IToolContext
 
     public IObservable<double> GetTrackedLayerTopObservable(IObservable<int> layer)
     {
-        return new TrackedLayerTopObservable(layer, this);
+        return layer.Select(GetTrackedLayerTopObservable).Switch();
+    }
+
+    public IObservable<double> GetTrackedLayerTopObservable(int zIndex)
+    {
+        lock (_trackerCache)
+        {
+            if (!_trackerCache.TryGetValue(zIndex, out TrackedLayerTopObservable? value))
+            {
+                value = new TrackedLayerTopObservable(zIndex, this);
+                _trackerCache.Add(zIndex, value);
+            }
+
+            return value;
+        }
     }
 
     public double CalculateLayerTop(int layer)
@@ -501,7 +559,7 @@ public sealed class TimelineViewModel : IToolContext
 
     public bool AnySelected(ElementViewModel? exclude = null)
     {
-        foreach (ElementViewModel item in Layers)
+        foreach (ElementViewModel item in Elements)
         {
             if ((exclude == null || exclude != item) && item.IsSelected.Value)
             {
@@ -514,7 +572,7 @@ public sealed class TimelineViewModel : IToolContext
 
     public IEnumerable<ElementViewModel> GetSelected(ElementViewModel? exclude = null)
     {
-        foreach (ElementViewModel item in Layers)
+        foreach (ElementViewModel item in Elements)
         {
             if ((exclude == null || exclude != item) && item.IsSelected.Value)
             {
@@ -533,68 +591,60 @@ public sealed class TimelineViewModel : IToolContext
         return EditorContext.GetService(serviceType);
     }
 
-    private sealed class TrackedLayerTopObservable : LightweightObservableBase<double>
+    public ElementViewModel? GetViewModelFor(Element element)
     {
-        private readonly TimelineViewModel _timeline;
-        private readonly IObservable<int> _layerNum;
+        return Elements.FirstOrDefault(x => x.Model == element);
+    }
+
+    private sealed class TrackedLayerTopObservable(int layerNum, TimelineViewModel timeline) : LightweightObservableBase<double>, IDisposable
+    {
         private IDisposable? _disposable1;
         private IDisposable? _disposable2;
-        private IDisposable? _disposable3;
-        private int _prevLayerNum = -1;
-
-        public TrackedLayerTopObservable(IObservable<int> layerNum, TimelineViewModel timeline)
-        {
-            _layerNum = layerNum;
-            _timeline = timeline;
-        }
 
         protected override void Deinitialize()
         {
             _disposable1?.Dispose();
             _disposable2?.Dispose();
-            _disposable3?.Dispose();
+            timeline._trackerCache.Remove(layerNum);
         }
 
         protected override void Initialize()
         {
-            _disposable1 = _timeline.LayerHeaders.CollectionChangedAsObservable()
+            _disposable1 = timeline.LayerHeaders.CollectionChangedAsObservable()
                 .Subscribe(OnCollectionChanged);
 
-            _disposable2 = _timeline.LayerHeightChanged.Subscribe(OnLayerHeightChanged);
-
-            _disposable3 = _layerNum.Subscribe(OnLayerNumChanged);
-        }
-
-        private void OnLayerNumChanged(int obj)
-        {
-            _prevLayerNum = obj;
-            PublishNext(_timeline.CalculateLayerTop(_prevLayerNum));
+            _disposable2 = timeline.LayerHeightChanged.Subscribe(OnLayerHeightChanged);
         }
 
         private void OnLayerHeightChanged(LayerHeaderViewModel obj)
         {
-            if (obj.Number.Value < _prevLayerNum)
+            if (obj.Number.Value < layerNum)
             {
-                PublishNext(_timeline.CalculateLayerTop(_prevLayerNum));
+                PublishNext(timeline.CalculateLayerTop(layerNum));
             }
         }
 
         protected override void Subscribed(IObserver<double> observer, bool first)
         {
-            observer.OnNext(_timeline.CalculateLayerTop(_prevLayerNum));
+            observer.OnNext(timeline.CalculateLayerTop(layerNum));
         }
 
         private void OnCollectionChanged(NotifyCollectionChangedEventArgs obj)
         {
             if (obj.Action == NotifyCollectionChangedAction.Move)
             {
-                if (_prevLayerNum != obj.OldStartingIndex
-                    && ((_prevLayerNum > obj.OldStartingIndex && _prevLayerNum <= obj.NewStartingIndex)
-                    || (_prevLayerNum < obj.OldStartingIndex && _prevLayerNum >= obj.NewStartingIndex)))
+                if (layerNum != obj.OldStartingIndex
+                    && ((layerNum > obj.OldStartingIndex && layerNum <= obj.NewStartingIndex)
+                    || (layerNum < obj.OldStartingIndex && layerNum >= obj.NewStartingIndex)))
                 {
-                    PublishNext(_timeline.CalculateLayerTop(_prevLayerNum));
+                    PublishNext(timeline.CalculateLayerTop(layerNum));
                 }
             }
+        }
+
+        public void Dispose()
+        {
+            PublishCompleted();
         }
     }
 }

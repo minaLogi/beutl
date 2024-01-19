@@ -3,6 +3,8 @@
 using Beutl.Api.Objects;
 using Beutl.Api.Services;
 
+using OpenTelemetry.Trace;
+
 using Reactive.Bindings;
 
 using Serilog;
@@ -19,41 +21,48 @@ public enum RankingType
 
 public record RankingModel(string DisplayName, RankingType Type);
 
-public sealed class RankingPageViewModel : BasePageViewModel
+public sealed class RankingPageViewModel : BasePageViewModel, ISupportRefreshViewModel
 {
     private readonly ILogger _logger = Log.ForContext<RankingPageViewModel>();
-    private readonly CompositeDisposable _disposables = new();
+    private readonly CompositeDisposable _disposables = [];
     private readonly DiscoverService _discover;
 
     public RankingPageViewModel(DiscoverService discover, RankingType rankingType)
     {
-        Rankings = new RankingModel[]
-        {
+        Rankings =
+        [
             new RankingModel(ExtensionsPage.Overall, RankingType.Overall),
             new RankingModel(ExtensionsPage.Daily, RankingType.Daily),
             new RankingModel(ExtensionsPage.Weekly, RankingType.Weekly),
             new RankingModel(ExtensionsPage.Recently, RankingType.Recently),
-        };
+        ];
         SelectedRanking = new ReactivePropertySlim<RankingModel>(Rankings.First(x => x.Type == rankingType));
         _discover = discover;
 
         Refresh = new AsyncReactiveCommand(IsBusy.Not())
             .WithSubscribe(async () =>
             {
+                using Activity? activity = Services.Telemetry.StartActivity("RankingPage.Refresh");
+
                 try
                 {
                     IsBusy.Value = true;
                     Items.Clear();
-                    Package[] array = await LoadItems(SelectedRanking.Value.Type, 0, 30);
+                    Items.AddRange(Enumerable.Repeat(new DummyItem(), 10));
+
+                    Package[] array = await LoadItems(SelectedRanking.Value.Type, 0, 30, activity);
+                    Items.Clear();
                     Items.AddRange(array);
 
                     if (array.Length == 30)
                     {
-                        Items.Add(null);
+                        Items.Add(new LoadMoreItem());
                     }
                 }
                 catch (Exception e)
                 {
+                    activity?.SetStatus(ActivityStatusCode.Error);
+                    activity?.RecordException(e);
                     ErrorHandle(e);
                     _logger.Error(e, "An unexpected error has occurred.");
                 }
@@ -70,20 +79,24 @@ public sealed class RankingPageViewModel : BasePageViewModel
         More = new AsyncReactiveCommand(IsBusy.Not())
             .WithSubscribe(async () =>
             {
+                using Activity? activity = Services.Telemetry.StartActivity("RankingPage.More");
+
                 try
                 {
                     IsBusy.Value = true;
                     Items.RemoveAt(Items.Count - 1);
-                    Package[] array = await LoadItems(SelectedRanking.Value.Type, Items.Count, 30);
+                    Package[] array = await LoadItems(SelectedRanking.Value.Type, Items.Count, 30, activity);
                     Items.AddRange(array);
 
                     if (array.Length == 30)
                     {
-                        Items.Add(null);
+                        Items.Add(new LoadMoreItem());
                     }
                 }
                 catch (Exception e)
                 {
+                    activity?.SetStatus(ActivityStatusCode.Error);
+                    activity?.RecordException(e);
                     ErrorHandle(e);
                     _logger.Error(e, "An unexpected error has occurred.");
                 }
@@ -99,7 +112,7 @@ public sealed class RankingPageViewModel : BasePageViewModel
 
     public RankingModel[] Rankings { get; }
 
-    public AvaloniaList<Package?> Items { get; } = new();
+    public AvaloniaList<object> Items { get; } = [];
 
     public AsyncReactiveCommand Refresh { get; }
 
@@ -107,15 +120,19 @@ public sealed class RankingPageViewModel : BasePageViewModel
 
     public ReactivePropertySlim<bool> IsBusy { get; } = new();
 
-    private async Task<Package[]> LoadItems(RankingType rankingType, int start, int count)
+    private async Task<Package[]> LoadItems(RankingType rankingType, int start, int count, Activity? activity)
     {
-        return rankingType switch
+        using (await _discover.Lock.LockAsync())
         {
-            RankingType.Daily => await _discover.GetDailyRanking(start, count),
-            RankingType.Weekly => await _discover.GetWeeklyRanking(start, count),
-            RankingType.Recently => await _discover.GetRecentlyRanking(start, count),
-            _ => await _discover.GetOverallRanking(start, count),
-        };
+            activity?.AddEvent(new("Entered_AsyncLock"));
+            return rankingType switch
+            {
+                RankingType.Daily => await _discover.GetDailyRanking(start, count),
+                RankingType.Weekly => await _discover.GetWeeklyRanking(start, count),
+                RankingType.Recently => await _discover.GetRecentlyRanking(start, count),
+                _ => await _discover.GetOverallRanking(start, count),
+            };
+        }
     }
 
     public override void Dispose()

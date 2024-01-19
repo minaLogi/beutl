@@ -17,10 +17,11 @@ public enum PropertyEditorStyle
 {
     Normal,
     Compact,
-    ListItem
+    ListItem,
+    Settings,
 }
 
-[PseudoClasses(":compact", ":list-item", ":visible-left-button", ":visible-right-button")]
+[PseudoClasses(":compact", ":list-item", ":settings", ":visible-left-button", ":visible-right-button")]
 [TemplatePart("PART_LeftButton", typeof(Button))]
 [TemplatePart("PART_RightButton", typeof(Button))]
 [TemplatePart("PART_DeleteButton", typeof(Button))]
@@ -29,12 +30,12 @@ public class PropertyEditor : TemplatedControl, IPropertyEditorContextVisitor, I
 {
     public static readonly StyledProperty<string> HeaderProperty =
         AvaloniaProperty.Register<PropertyEditor, string>(nameof(Header));
+    
+    public static readonly StyledProperty<string> DescriptionProperty =
+        AvaloniaProperty.Register<PropertyEditor, string>(nameof(Description));
 
     public static readonly StyledProperty<bool> IsReadOnlyProperty =
         TextBox.IsReadOnlyProperty.AddOwner<PropertyEditor>();
-
-    public static readonly StyledProperty<bool> UseCompactProperty =
-        AvaloniaProperty.Register<PropertyEditor, bool>(nameof(UseCompact), false);
 
     public static readonly StyledProperty<PropertyEditorStyle> EditorStyleProperty =
         AvaloniaProperty.Register<PropertyEditor, PropertyEditorStyle>(nameof(EditorStyle), PropertyEditorStyle.Normal);
@@ -45,8 +46,8 @@ public class PropertyEditor : TemplatedControl, IPropertyEditorContextVisitor, I
     public static readonly StyledProperty<IDataTemplate> MenuContentTemplateProperty =
         AvaloniaProperty.Register<PropertyEditor, IDataTemplate>(nameof(MenuContentTemplate));
 
-    public static readonly StyledProperty<int> KeyFrameIndexProperty =
-        AvaloniaProperty.Register<PropertyEditor, int>(nameof(KeyFrameIndex), 0);
+    public static readonly StyledProperty<float> KeyFrameIndexProperty =
+        AvaloniaProperty.Register<PropertyEditor, float>(nameof(KeyFrameIndex), 0);
 
     public static readonly StyledProperty<int> KeyFrameCountProperty =
         AvaloniaProperty.Register<PropertyEditor, int>(nameof(KeyFrameCount), 0, coerce: (_, v) => Math.Max(v, 0));
@@ -54,11 +55,11 @@ public class PropertyEditor : TemplatedControl, IPropertyEditorContextVisitor, I
     public static readonly StyledProperty<Control> ReorderHandleProperty =
         AvaloniaProperty.Register<PropertyEditor, Control>(nameof(ReorderHandle), null);
 
-    public static readonly RoutedEvent<PropertyEditorValueChangedEventArgs> ValueChangingEvent =
-        RoutedEvent.Register<PropertyEditor, PropertyEditorValueChangedEventArgs>(nameof(ValueChanging), RoutingStrategies.Bubble);
-
     public static readonly RoutedEvent<PropertyEditorValueChangedEventArgs> ValueChangedEvent =
         RoutedEvent.Register<PropertyEditor, PropertyEditorValueChangedEventArgs>(nameof(ValueChanged), RoutingStrategies.Bubble);
+
+    public static readonly RoutedEvent<PropertyEditorValueChangedEventArgs> ValueConfirmedEvent =
+        RoutedEvent.Register<PropertyEditor, PropertyEditorValueChangedEventArgs>(nameof(ValueConfirmed), RoutingStrategies.Bubble);
 
     private readonly CompositeDisposable _eventRevokers = new(3);
 
@@ -71,6 +72,12 @@ public class PropertyEditor : TemplatedControl, IPropertyEditorContextVisitor, I
     {
         get => GetValue(HeaderProperty);
         set => SetValue(HeaderProperty, value);
+    }
+    
+    public string Description
+    {
+        get => GetValue(DescriptionProperty);
+        set => SetValue(DescriptionProperty, value);
     }
 
     public bool IsReadOnly
@@ -85,12 +92,6 @@ public class PropertyEditor : TemplatedControl, IPropertyEditorContextVisitor, I
         set => SetValue(EditorStyleProperty, value);
     }
 
-    public bool UseCompact
-    {
-        get => GetValue(UseCompactProperty);
-        private set => SetValue(UseCompactProperty, value);
-    }
-
     public object MenuContent
     {
         get => GetValue(MenuContentProperty);
@@ -103,7 +104,7 @@ public class PropertyEditor : TemplatedControl, IPropertyEditorContextVisitor, I
         set => SetValue(MenuContentTemplateProperty, value);
     }
 
-    public int KeyFrameIndex
+    public float KeyFrameIndex
     {
         get => GetValue(KeyFrameIndexProperty);
         set => SetValue(KeyFrameIndexProperty, value);
@@ -123,16 +124,16 @@ public class PropertyEditor : TemplatedControl, IPropertyEditorContextVisitor, I
 
     public event EventHandler DeleteRequested;
 
-    public event EventHandler<PropertyEditorValueChangedEventArgs> ValueChanging
-    {
-        add => AddHandler(ValueChangingEvent, value);
-        remove => RemoveHandler(ValueChangingEvent, value);
-    }
-
     public event EventHandler<PropertyEditorValueChangedEventArgs> ValueChanged
     {
         add => AddHandler(ValueChangedEvent, value);
         remove => RemoveHandler(ValueChangedEvent, value);
+    }
+
+    public event EventHandler<PropertyEditorValueChangedEventArgs> ValueConfirmed
+    {
+        add => AddHandler(ValueConfirmedEvent, value);
+        remove => RemoveHandler(ValueConfirmedEvent, value);
     }
 
     public virtual void Visit(IPropertyEditorContext context)
@@ -143,6 +144,7 @@ public class PropertyEditor : TemplatedControl, IPropertyEditorContextVisitor, I
     {
         PseudoClasses.Remove(":compact");
         PseudoClasses.Remove(":list-item");
+        PseudoClasses.Remove(":settings");
         switch (EditorStyle)
         {
             case PropertyEditorStyle.Compact:
@@ -152,6 +154,10 @@ public class PropertyEditor : TemplatedControl, IPropertyEditorContextVisitor, I
             case PropertyEditorStyle.ListItem:
                 PseudoClasses.Add(":list-item");
                 break;
+
+            case PropertyEditorStyle.Settings:
+                PseudoClasses.Add(":settings");
+                break;
         }
     }
 
@@ -160,7 +166,6 @@ public class PropertyEditor : TemplatedControl, IPropertyEditorContextVisitor, I
         base.OnPropertyChanged(change);
         if (change.Property == EditorStyleProperty)
         {
-            UseCompact = EditorStyle == PropertyEditorStyle.Compact;
             UpdateStyle();
         }
         else if (change.Property == MenuContentProperty)
@@ -211,7 +216,7 @@ public class PropertyEditor : TemplatedControl, IPropertyEditorContextVisitor, I
 
     private void OnLeftButtonClick(object sender, RoutedEventArgs e)
     {
-        int value = KeyFrameIndex - 1;
+        float value = MathF.Ceiling(KeyFrameIndex) - 1;
         if (0 <= value)
         {
             KeyFrameIndex = value;
@@ -220,7 +225,7 @@ public class PropertyEditor : TemplatedControl, IPropertyEditorContextVisitor, I
 
     private void OnRightButtonClick(object sender, RoutedEventArgs e)
     {
-        int value = KeyFrameIndex + 1;
+        float value = MathF.Floor(KeyFrameIndex) + 1;
         if (value < KeyFrameCount)
         {
             KeyFrameIndex = value;

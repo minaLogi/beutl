@@ -1,166 +1,176 @@
 ﻿using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.Generators;
+using Avalonia.Controls.Primitives;
+using Avalonia.Data;
+using Avalonia.Data.Converters;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.VisualTree;
 
-using Beutl.Services;
+using Beutl.Configuration;
+using Beutl.Utilities;
 using Beutl.ViewModels;
+using Beutl.Views.LibraryViews;
+
+using FluentAvalonia.UI.Controls;
+
+using Symbol = FluentIcons.Common.Symbol;
+using SymbolIcon = FluentIcons.FluentAvalonia.SymbolIcon;
 
 namespace Beutl.Views;
 
 public sealed partial class Library : UserControl
 {
-    private CancellationTokenSource? _cts;
+    private static readonly (Symbol Icon, string Text, string Id, Func<Control> Create)[] s_tabItems =
+    [
+        (Symbol.Search, Strings.Search, "Search", () => new SearchView()),
+        (Symbol.BezierCurveSquare, Strings.Easings, "Easings", () => new EasingsView()),
+        (Symbol.Library, Strings.Library, "Library", () => new LibraryView()),
+        (Symbol.Flow, Strings.NodeTree, "Nodes", () => new NodesView()),
+    ];
 
     public Library()
     {
         InitializeComponent();
-        SearchBox.GetObservable(TextBox.TextProperty).Subscribe(SearchQueryChanged);
 
-        NodeTreeView.ContainerPrepared += OnItemContainerPrepared;
-        NodeTreeView.ContainerClearing += OnItemContainerClearing;
-        LibraryTree.ContainerPrepared += OnItemContainerPrepared;
-        LibraryTree.ContainerClearing += OnItemContainerClearing;
-
-        searchResult.ContainerPrepared += OnItemContainerPrepared;
-        searchResult.ContainerClearing += OnItemContainerClearing;
-
-        itemsControl.AddHandler(PointerPressedEvent, OnEasingsPointerPressed, RoutingStrategies.Tunnel);
-        splineEasing.AddHandler(PointerPressedEvent, OnSplineEasingPointerPressed, RoutingStrategies.Tunnel);
-    }
-
-    private void OnItemContainerPrepared(object? sender, ContainerPreparedEventArgs e)
-    {
-        if (e.Container is TreeViewItem treeItem)
-        {
-            treeItem.AddHandler(PointerPressedEvent, TreeViewPointerPressed, RoutingStrategies.Tunnel);
-        }
-        else if (e.Container is ListBoxItem listItem)
-        {
-            listItem.AddHandler(PointerPressedEvent, ListBoxItemPointerPressed, RoutingStrategies.Tunnel);
-        }
-    }
-
-    private void OnItemContainerClearing(object? sender, ContainerClearingEventArgs e)
-    {
-        if (e.Container is TreeViewItem treeItem)
-        {
-            treeItem.RemoveHandler(PointerPressedEvent, TreeViewPointerPressed);
-        }
-        else if (e.Container is ListBoxItem listItem)
-        {
-            listItem.RemoveHandler(PointerPressedEvent, ListBoxItemPointerPressed);
-        }
-    }
-
-    private async void TreeViewPointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        LibraryItemViewModel? item;
-        if (e.GetCurrentPoint(LibraryTree).Properties.IsLeftButtonPressed)
-        {
-            item = (e.Source as StyledElement)?.DataContext as LibraryItemViewModel;
-            LibraryTree.SelectedItem = item;
-        }
-        else if (e.GetCurrentPoint(NodeTreeView).Properties.IsLeftButtonPressed)
-        {
-            item = (e.Source as StyledElement)?.DataContext as LibraryItemViewModel;
-            NodeTreeView.SelectedItem = item;
-        }
-        else
-        {
-            return;
-        }
-
-        if (item != null)
-        {
-            (string, Type)[] arr = item.TryDragDrop().ToArray();
-            if (arr.Length > 0)
+        tabStrip.ItemsSource = s_tabItems
+            .Select(item =>
             {
-                var dataObject = new DataObject();
-                foreach ((string format, Type type) in arr)
+                var tabItem = new TabStripItem();
+                var binding = new Binding($"{nameof(LibraryViewModel.LibraryTabDisplayModes)}[{item.Id}]", BindingMode.OneWay)
                 {
-                    dataObject.Set(format, type);
-                }
+                    Converter = new FuncValueConverter<LibraryTabDisplayMode, bool>(v => v == LibraryTabDisplayMode.Show)
+                };
+                tabItem.Bind(IsVisibleProperty, binding);
+                tabItem.Content = new StackPanel
+                {
+                    Children =
+                    {
+                        new SymbolIcon { Symbol = item.Icon },
+                        new TextBlock { Text = item.Text }
+                    }
+                };
+                var switchMenu = new ToggleMenuFlyoutItem
+                {
+                    [!ToggleMenuFlyoutItem.IsCheckedProperty] = binding,
+                    Text = Strings.AlwaysDisplay
+                };
+                switchMenu.Click += (s, e) =>
+                {
+                    if (DataContext is LibraryViewModel viewModel)
+                    {
+                        viewModel.LibraryTabDisplayModes[item.Id] = !switchMenu.IsChecked
+                            ? LibraryTabDisplayMode.Show : LibraryTabDisplayMode.Hide;
+                    }
+                };
+                tabItem.ContextFlyout = new FAMenuFlyout
+                {
+                    ItemsSource = new[] { switchMenu }
+                };
 
-                await DragDrop.DoDragDrop(e, dataObject, DragDropEffects.Copy);
+                return tabItem;
+            })
+            .ToArray();
+
+        moreButton.ContextFlyout = new FAMenuFlyout
+        {
+            ItemsSource = s_tabItems.Select(item =>
+            {
+                var binding = new Binding($"{nameof(LibraryViewModel.LibraryTabDisplayModes)}[{item.Id}]", BindingMode.OneWay)
+                {
+                    Converter = new FuncValueConverter<LibraryTabDisplayMode, bool>(v => v == LibraryTabDisplayMode.Show)
+                };
+                var switchMenu = new ToggleMenuFlyoutItem
+                {
+                    [!ToggleMenuFlyoutItem.IsCheckedProperty] = binding,
+                    Text = item.Text
+                };
+                switchMenu.Click += (s, e) =>
+                {
+                    if (DataContext is LibraryViewModel viewModel)
+                    {
+                        viewModel.LibraryTabDisplayModes[item.Id] = !switchMenu.IsChecked
+                            ? LibraryTabDisplayMode.Show : LibraryTabDisplayMode.Hide;
+                    }
+                };
+                return switchMenu;
+            })
+            .ToArray()
+        };
+
+        carousel.ItemsSource = s_tabItems.Select(item => item.Create())
+            .ToArray();
+
+        scroll.GetObservable(ScrollViewer.OffsetProperty)
+            .Subscribe(_ => OnOffsetChanged());
+        scroll.TemplateApplied += OnScrollViewerTemplateApplied;
+
+        scroll.AddHandler(PointerWheelChangedEvent, OnScrollPointerWheelChanged, RoutingStrategies.Tunnel);
+    }
+
+    private void OnScrollPointerWheelChanged(object? sender, PointerWheelEventArgs e)
+    {
+        scroll.Offset = scroll.Offset.WithX(scroll.Offset.X - (e.Delta.Y * 16));
+        e.Handled = true;
+    }
+
+    private void OnScrollViewerTemplateApplied(object? sender, TemplateAppliedEventArgs e)
+    {
+        void OnScrollBarTemplateApplied(object? sender, TemplateAppliedEventArgs e)
+        {
+            if (sender is ScrollBar scrollBar)
+            {
+                OnOffsetChanged();
+                scrollBar.TemplateApplied -= OnScrollBarTemplateApplied;
             }
         }
+
+        ScrollBar? bar = e.NameScope.Find<ScrollBar>("PART_HorizontalScrollBar");
+
+        if (bar != null)
+        {
+            bar.TemplateApplied += OnScrollBarTemplateApplied;
+        }
+        OnOffsetChanged();
+        scroll.TemplateApplied -= OnScrollViewerTemplateApplied;
     }
 
-    private async void ListBoxItemPointerPressed(object? sender, PointerPressedEventArgs e)
+    private void OnOffsetChanged()
     {
-        KeyValuePair<int, LibraryItemViewModel>? item;
-        if (e.GetCurrentPoint(searchResult).Properties.IsLeftButtonPressed)
+        Vector offset = scroll.Offset;
+        Visual? left = scroll.GetVisualDescendants().FirstOrDefault(v => v.Name == "PART_LineUpButton");
+        Visual? right = scroll.GetVisualDescendants().FirstOrDefault(v => v.Name == "PART_LineDownButton");
+        if (left != null)
         {
-            item = (e.Source as StyledElement)?.DataContext as KeyValuePair<int, LibraryItemViewModel>?;
-            searchResult.SelectedItem = item;
-        }
-        else
-        {
-            return;
+            left.IsVisible = !MathUtilities.IsZero(offset.X);
         }
 
-        if (item.HasValue)
+        if (right != null)
         {
-            (string, Type)[] arr = item.Value.Value.TryDragDrop().ToArray();
-            if (arr.Length > 0)
-            {
-                var dataObject = new DataObject();
-                foreach ((string format, Type type) in arr)
-                {
-                    dataObject.Set(format, type);
-                }
-
-                await DragDrop.DoDragDrop(e, dataObject, DragDropEffects.Copy);
-            }
+            right.IsVisible = !MathUtilities.LessThanOrClose(tabStackPanel.Bounds.Width, scroll.Viewport.Width + offset.X);
         }
     }
 
-    private async void OnSplineEasingPointerPressed(object? sender, PointerPressedEventArgs e)
+    private void MoreButton_Click(object? sender, RoutedEventArgs e)
     {
-        var data = new DataObject();
-        data.Set(KnownLibraryItemFormats.Easing, new Animation.Easings.SplineEasing());
-        await DragDrop.DoDragDrop(e, data, DragDropEffects.Copy | DragDropEffects.Link);
+        moreButton.ContextFlyout?.ShowAt(moreButton);
     }
 
-    private async void OnEasingsPointerPressed(object? sender, PointerPressedEventArgs e)
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
-        if (itemsControl.ItemsSource is { } items)
-        {
-            foreach (object? item in items)
-            {
-                Control? control = itemsControl.ContainerFromItem(item);
-
-                if (control?.IsPointerOver == true)
-                {
-                    var data = new DataObject();
-                    data.Set(KnownLibraryItemFormats.Easing, item);
-                    await DragDrop.DoDragDrop(e, data, DragDropEffects.Copy | DragDropEffects.Link);
-                    return;
-                }
-            }
-        }
-    }
-
-    private async void SearchQueryChanged(string? str)
-    {
+        base.OnAttachedToVisualTree(e);
         if (DataContext is LibraryViewModel viewModel)
         {
-            _cts?.Cancel();
-            await Task.Delay(100);
+            tabStrip.SelectedIndex = viewModel.SelectedTab;
+        }
+    }
 
-            if (string.IsNullOrWhiteSpace(str))
-            {
-                searchResult.ItemsSource = viewModel.AllItems;
-                viewModel.SearchResult.Clear();
-            }
-            else
-            {
-                _cts = new CancellationTokenSource();
-                searchResult.ItemsSource = viewModel.SearchResult;
-                await viewModel.Search(str, _cts.Token);
-            }
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
+        if (DataContext is LibraryViewModel viewModel)
+        {
+            viewModel.SelectedTab = tabStrip.SelectedIndex;
         }
     }
 }

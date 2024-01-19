@@ -9,6 +9,7 @@ using Beutl.Collections.Pooled;
 using Beutl.Media;
 using Beutl.ProjectSystem;
 using Beutl.Rendering;
+using Beutl.Serialization;
 
 namespace Beutl.Operation;
 
@@ -40,6 +41,15 @@ public sealed class SourceOperation : Hierarchical, IAffectsRender
     [NotAutoSerialized]
     public ICoreList<SourceOperator> Children => _children;
 
+    public IRecordableCommand OnSplit(bool backward, TimeSpan startDelta,TimeSpan lengthDelta)
+    {
+        return _children.Select(v => v.OnSplit(backward, startDelta, lengthDelta))
+            .Where(v => v != null)
+            .ToArray()!
+            .ToCommand();
+    }
+
+    [ObsoleteSerializationApi]
     public override void ReadFromJson(JsonObject json)
     {
         base.ReadFromJson(json);
@@ -63,6 +73,7 @@ public sealed class SourceOperation : Hierarchical, IAffectsRender
         }
     }
 
+    [ObsoleteSerializationApi]
     public override void WriteToJson(JsonObject json)
     {
         base.WriteToJson(json);
@@ -88,34 +99,63 @@ public sealed class SourceOperation : Hierarchical, IAffectsRender
         }
     }
 
-    public void Evaluate(IRenderer renderer, Element layer)
+    public override void Serialize(ICoreSerializationContext context)
     {
-        Initialize(renderer, layer.Clock);
-        if (_contexts != null)
+        base.Serialize(context);
+        context.SetValue(nameof(Children), Children);
+    }
+
+    public override void Deserialize(ICoreSerializationContext context)
+    {
+        base.Deserialize(context);
+        if (context.GetValue<SourceOperator[]>(nameof(Children)) is { } children)
         {
-            using var flow = new PooledList<Renderable>();
-            foreach (OperatorEvaluationContext? item in _contexts.AsSpan().Slice(0, _contextsLength))
+            Children.Replace(children);
+        }
+    }
+
+    public PooledList<Renderable> Evaluate(EvaluationTarget target, IRenderer renderer, Element element)
+    {
+        Initialize(renderer, element.Clock);
+        var flow = new PooledList<Renderable>();
+
+        try
+        {
+            if (_contexts != null)
             {
-                item.FlowRenderables = flow;
-                item.Operator.Evaluate(item);
-            }
-
-
-            foreach (Renderable item in flow.Span)
-            {
-                item.ZIndex = layer.ZIndex;
-                item.TimeRange = new TimeRange(layer.Start, layer.Length);
-                item.ApplyStyling(layer.Clock);
-                item.ApplyAnimations(layer.Clock);
-                item.IsVisible = layer.IsEnabled;
-
-                while (item.BatchUpdate)
+                foreach (OperatorEvaluationContext? item in _contexts.AsSpan().Slice(0, _contextsLength))
                 {
-                    item.EndBatchUpdate();
+                    EvaluationTarget t = item.Operator.GetEvaluationTarget();
+                    if (t == EvaluationTarget.Unknown || t == target)
+                    {
+                        item.Target = target;
+                        item.FlowRenderables = flow;
+                        item.Operator.Evaluate(item);
+                    }
+                }
+
+
+                foreach (Renderable item in flow.Span)
+                {
+                    item.ZIndex = element.ZIndex;
+                    item.TimeRange = new TimeRange(element.Start, element.Length);
+                    item.ApplyStyling(element.Clock);
+                    item.ApplyAnimations(element.Clock);
+                    item.IsVisible = element.IsEnabled;
+
+                    while (item.BatchUpdate)
+                    {
+                        item.EndBatchUpdate();
+                    }
                 }
             }
 
-            renderer.RenderScene[layer.ZIndex].UpdateAll(flow);
+            return flow;
+        }
+        catch
+        {
+            flow.Dispose();
+            throw;
         }
     }
 

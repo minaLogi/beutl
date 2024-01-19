@@ -1,13 +1,17 @@
-﻿using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 
 using Beutl.Animation.Easings;
+using Beutl.Configuration;
 using Beutl.NodeTree;
 using Beutl.Services;
 
 using Reactive.Bindings;
+using Reactive.Bindings.Extensions;
 
 namespace Beutl.ViewModels;
 
@@ -23,7 +27,7 @@ public class LibraryItemViewModel
 
     public string? Type { get; init; }
 
-    public List<LibraryItemViewModel> Children { get; } = new();
+    public List<LibraryItemViewModel> Children { get; } = [];
 
     public static LibraryItemViewModel CreateFromNodeRegistryItem(NodeRegistry.BaseRegistryItem registryItem, string? parentFullName = null)
     {
@@ -213,12 +217,12 @@ public class LibraryItemViewModel
 
 public sealed class LibraryViewModel : IDisposable
 {
+    private readonly CompositeDisposable _disposables = [];
     private readonly Nito.AsyncEx.AsyncLock _asyncLock = new();
-    private EditViewModel _editViewModel;
 
     public LibraryViewModel(EditViewModel editViewModel)
     {
-        _editViewModel = editViewModel;
+        _ = editViewModel;
 
         IReadOnlyList<LibraryItem> libItems = LibraryService.Current.Items;
         LibraryItems = new List<LibraryItemViewModel>(libItems.Count);
@@ -233,8 +237,8 @@ public sealed class LibraryViewModel : IDisposable
         AddAllItems(Nodes);
     }
 
-    public ReactiveCollection<Easing> Easings { get; } = new()
-    {
+    public ReactiveCollection<Easing> Easings { get; } =
+    [
         new BackEaseIn(),
         new BackEaseInOut(),
         new BackEaseOut(),
@@ -266,7 +270,7 @@ public sealed class LibraryViewModel : IDisposable
         new SineEaseInOut(),
         new SineEaseOut(),
         new LinearEasing(),
-    };
+    ];
 
     public List<LibraryItemViewModel> LibraryItems { get; }
 
@@ -274,7 +278,13 @@ public sealed class LibraryViewModel : IDisposable
 
     public List<KeyValuePair<int, LibraryItemViewModel>> AllItems { get; }
 
-    public ReactiveCollection<KeyValuePair<int, LibraryItemViewModel>> SearchResult { get; } = new();
+    public ReactiveCollection<KeyValuePair<int, LibraryItemViewModel>> SearchResult { get; } = [];
+
+    public int SelectedTab { get; set; } = 2;
+
+    [SuppressMessage("Performance", "CA1822:メンバーを static に設定します")]
+    public CoreDictionary<string, LibraryTabDisplayMode> LibraryTabDisplayModes
+        => GlobalConfiguration.Instance.EditorConfig.LibraryTabDisplayModes;
 
     private void AddAllItems(List<LibraryItemViewModel> items)
     {
@@ -294,7 +304,7 @@ public sealed class LibraryViewModel : IDisposable
                 SearchResult.ClearOnScheduler();
                 await Task.Run(() =>
                 {
-                    Regex[] regices = RegexHelper.CreateRegices(str);
+                    Regex[] regices = RegexHelper.CreateRegexes(str);
                     for (int i = 0; i < AllItems.Count; i++)
                     {
                         KeyValuePair<int, LibraryItemViewModel> item = AllItems[i];
@@ -317,11 +327,11 @@ public sealed class LibraryViewModel : IDisposable
 
     public void Dispose()
     {
+        _disposables.Dispose();
         Easings.Clear();
         LibraryItems.Clear();
         Nodes.Clear();
         AllItems.Clear();
         SearchResult.Clear();
-        _editViewModel = null!;
     }
 }

@@ -7,23 +7,15 @@ using SkiaSharp;
 
 namespace Beutl.Graphics;
 
-public readonly struct BrushConstructor
+public readonly struct BrushConstructor(Size targetSize, IBrush? brush, BlendMode blendMode, IImmediateCanvasFactory factory)
 {
-    public BrushConstructor(Size targetSize, IBrush? brush, BlendMode blendMode, IImmediateCanvasFactory factory)
-    {
-        TargetSize = targetSize;
-        Brush = brush;
-        BlendMode = blendMode;
-        Factory = factory;
-    }
+    public Size TargetSize { get; } = targetSize;
 
-    public Size TargetSize { get; }
+    public IBrush? Brush { get; } = brush;
 
-    public IBrush? Brush { get; }
+    public BlendMode BlendMode { get; } = blendMode;
 
-    public BlendMode BlendMode { get; }
-
-    public IImmediateCanvasFactory Factory { get; }
+    public IImmediateCanvasFactory Factory { get; } = factory;
 
     public void ConfigurePaint(SKPaint paint)
     {
@@ -44,6 +36,10 @@ public readonly struct BrushConstructor
         else if (Brush is ITileBrush tileBrush)
         {
             ConfigureTileBrush(paint, tileBrush);
+        }
+        else if (Brush is IPerlinNoiseBrush perlinNoiseBrush)
+        {
+            ConfigurePerlinNoiseBrush(paint, perlinNoiseBrush);
         }
         else
         {
@@ -305,6 +301,44 @@ public readonly struct BrushConstructor
             surface?.Dispose();
             skbitmap?.Dispose();
             intermediate?.Dispose();
+        }
+    }
+
+    private void ConfigurePerlinNoiseBrush(SKPaint paint, IPerlinNoiseBrush perlinNoiseBrush)
+    {
+        SKShader? shader = null;
+        switch (perlinNoiseBrush.PerlinNoiseType)
+        {
+            case PerlinNoiseType.Turbulence:
+                shader = SKShader.CreatePerlinNoiseTurbulence(
+                    perlinNoiseBrush.BaseFrequencyX / 100f, perlinNoiseBrush.BaseFrequencyY / 100f,
+                    perlinNoiseBrush.Octaves, perlinNoiseBrush.Seed);
+                break;
+
+            case PerlinNoiseType.Fractal:
+                shader = SKShader.CreatePerlinNoiseFractalNoise(
+                    perlinNoiseBrush.BaseFrequencyX / 100f, perlinNoiseBrush.BaseFrequencyY / 100f,
+                    perlinNoiseBrush.Octaves, perlinNoiseBrush.Seed);
+                break;
+        }
+
+        if (shader != null)
+        {
+            if (perlinNoiseBrush.Transform != null)
+            {
+                Point transformOrigin = perlinNoiseBrush.TransformOrigin.ToPixels(TargetSize);
+                var offset = Matrix.CreateTranslation(transformOrigin);
+                Matrix transform = (-offset) * perlinNoiseBrush.Transform.Value * offset;
+
+                if (!transform.IsIdentity)
+                {
+                    SKShader tmp = shader;
+                    shader = shader.WithLocalMatrix(transform.ToSKMatrix());
+                    tmp.Dispose();
+                }
+            }
+
+            paint.Shader = shader;
         }
     }
 }

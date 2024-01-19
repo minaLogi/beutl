@@ -1,8 +1,6 @@
-﻿using Avalonia;
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
-using Avalonia.Styling;
 
 using Beutl.ViewModels.Dialogs;
 
@@ -49,7 +47,7 @@ public partial class AddOutputQueueDialog : ContentDialog
             args.Cancel = true;
 
             IsPrimaryButtonEnabled = true;
-            _sBtnBinding = this.Bind(IsSecondaryButtonEnabledProperty, vm.CanAdd);
+            _sBtnBinding = Bind(IsSecondaryButtonEnabledProperty, vm.CanAdd);
             SecondaryButtonText = Strings.Add;
             carousel.Next();
         }

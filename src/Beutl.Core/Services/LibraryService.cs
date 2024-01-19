@@ -25,15 +25,9 @@ public abstract class LibraryItem
     }
 }
 
-public sealed class MultipleTypeLibraryItem : LibraryItem
+public sealed class MultipleTypeLibraryItem(string displayName, string? description = null) : LibraryItem(displayName, description)
 {
-    private readonly Dictionary<string, Type> _types;
-
-    public MultipleTypeLibraryItem(string displayName, string? description = null)
-        : base(displayName, description)
-    {
-        _types = new Dictionary<string, Type>();
-    }
+    private readonly Dictionary<string, Type> _types = [];
 
     public IReadOnlyDictionary<string, Type> Types => _types;
 
@@ -45,32 +39,23 @@ public sealed class MultipleTypeLibraryItem : LibraryItem
     }
 }
 
-public sealed class SingleTypeLibraryItem : LibraryItem
+public sealed class SingleTypeLibraryItem(
+    string format,
+    Type implementationType,
+    string displayName,
+    string? description = null)
+    : LibraryItem(displayName, description)
 {
-    public SingleTypeLibraryItem(
-        string format,
-        Type implementationType,
-        string displayName,
-        string? description = null)
-        : base(displayName, description)
-    {
-        Format = format;
-        ImplementationType = implementationType;
-    }
+    public string Format { get; } = format;
 
-    public string Format { get; }
-
-    public Type ImplementationType { get; }
+    public Type ImplementationType { get; } = implementationType;
 }
 
-public sealed class GroupLibraryItem : LibraryItem
+public sealed class GroupLibraryItem(string displayName, string? description = null)
+    : LibraryItem(displayName, description)
 {
-    private readonly List<LibraryItem> _items = new();
-
-    public GroupLibraryItem(string displayName, string? description = null)
-        : base(displayName, description)
-    {
-    }
+    private readonly List<LibraryItem> _items = [];
+    private readonly object _lock = new();
 
     public IReadOnlyList<LibraryItem> Items => _items;
 
@@ -84,20 +69,26 @@ public sealed class GroupLibraryItem : LibraryItem
 
     public void Merge(LibraryItem item)
     {
-        if (item is GroupLibraryItem group1
-            && Items.FirstOrDefault(x => x.DisplayName == item.DisplayName) is GroupLibraryItem group2)
+        lock (_lock)
         {
-            group2.Merge(group1.Items);
-        }
-        else
-        {
-            _items.Add(item);
+            if (item is GroupLibraryItem group1
+                && Items.FirstOrDefault(x => x.DisplayName == item.DisplayName) is GroupLibraryItem group2)
+            {
+                group2.Merge(group1.Items);
+            }
+            else
+            {
+                _items.Add(item);
+            }
         }
     }
 
     public GroupLibraryItem Add<T>(string format, string displayName, string? description = null)
     {
-        _items.Add(new SingleTypeLibraryItem(format, typeof(T), displayName, description));
+        lock (_lock)
+        {
+            _items.Add(new SingleTypeLibraryItem(format, typeof(T), displayName, description));
+        }
 
         return this;
     }
@@ -106,7 +97,10 @@ public sealed class GroupLibraryItem : LibraryItem
     {
         var item = new MultipleTypeLibraryItem(displayName);
         action(item);
-        _items.Add(item);
+        lock (_lock)
+        {
+            _items.Add(item);
+        }
 
         return this;
     }
@@ -115,7 +109,10 @@ public sealed class GroupLibraryItem : LibraryItem
     {
         var item = new MultipleTypeLibraryItem(displayName, description);
         action(item);
-        _items.Add(item);
+        lock (_lock)
+        {
+            _items.Add(item);
+        }
 
         return this;
     }
@@ -141,24 +138,30 @@ public sealed class GroupLibraryItem : LibraryItem
     protected internal override void SetLibraryService(LibraryService libraryService)
     {
         base.SetLibraryService(libraryService);
-        foreach (LibraryItem item in _items)
+        lock (_lock)
         {
-            item.SetLibraryService(libraryService);
+            foreach (LibraryItem item in _items)
+            {
+                item.SetLibraryService(libraryService);
+            }
         }
     }
 
     internal int Count()
     {
         int count = 1;
-        foreach (LibraryItem item in Items)
+        lock (_lock)
         {
-            if (item is GroupLibraryItem groupable1)
+            foreach (LibraryItem item in Items)
             {
-                count += groupable1.Count();
-            }
-            else
-            {
-                count++;
+                if (item is GroupLibraryItem groupable1)
+                {
+                    count += groupable1.Count();
+                }
+                else
+                {
+                    count++;
+                }
             }
         }
 
@@ -182,8 +185,9 @@ public static class KnownLibraryItemFormats
 
 public sealed class LibraryService
 {
-    private readonly List<LibraryItem> _items = new();
-    private readonly Dictionary<string, HashSet<Type>> _formatToType = new();
+    private readonly List<LibraryItem> _items = [];
+    private readonly Dictionary<string, HashSet<Type>> _formatToType = [];
+    private readonly object _lock = new();
     internal int _totalCount;
 
     public static LibraryService Current { get; } = new();
@@ -197,24 +201,27 @@ public sealed class LibraryService
 
     private void Register(LibraryItem item)
     {
-        item.SetLibraryService(this);
-        if (item is GroupLibraryItem group)
+        lock (_lock)
         {
-            _totalCount += group.Count();
-
-            if (_items.FirstOrDefault(x => x.DisplayName == item.DisplayName) is GroupLibraryItem registered)
+            item.SetLibraryService(this);
+            if (item is GroupLibraryItem group)
             {
-                registered.Merge(group.Items);
+                _totalCount += group.Count();
+
+                if (_items.FirstOrDefault(x => x.DisplayName == item.DisplayName) is GroupLibraryItem registered)
+                {
+                    registered.Merge(group.Items);
+                }
+                else
+                {
+                    _items.Add(group);
+                }
             }
             else
             {
-                _items.Add(group);
+                _totalCount++;
+                _items.Add(item);
             }
-        }
-        else
-        {
-            _totalCount++;
-            _items.Add(item);
         }
     }
 
@@ -259,7 +266,7 @@ public sealed class LibraryService
         }
         else
         {
-            hashset = new HashSet<Type>();
+            hashset = [];
             _formatToType.Add(format, hashset);
             return hashset;
         }
@@ -311,6 +318,9 @@ public sealed class LibraryService
             return null;
         }
 
-        return Find(_items, type);
+        lock (_lock)
+        {
+            return Find(_items, type);
+        }
     }
 }

@@ -67,7 +67,7 @@ public class StorageFileEditor : StringEditor
             {
                 FileInfo oldValue = Value;
                 Value = new FileInfo(localPath);
-                RaiseEvent(new PropertyEditorValueChangedEventArgs<FileInfo>(Value, oldValue, ValueChangedEvent));
+                RaiseEvent(new PropertyEditorValueChangedEventArgs<FileInfo>(Value, oldValue, ValueConfirmedEvent));
             }
         }
     }
@@ -88,7 +88,7 @@ public class StorageFileEditor : StringEditor
             Value = GetStorageFile(Text);
             if (Text != _oldText)
             {
-                RaiseEvent(new PropertyEditorValueChangedEventArgs<FileInfo>(Value, _oldValue, ValueChangedEvent));
+                RaiseEvent(new PropertyEditorValueChangedEventArgs<FileInfo>(Value, _oldValue, ValueConfirmedEvent));
             }
         }
     }
@@ -113,7 +113,7 @@ public class StorageFileEditor : StringEditor
         return false;
     }
 
-    private FileInfo GetStorageFile(string value)
+    private static FileInfo GetStorageFile(string value)
     {
         if (File.Exists(value))
         {

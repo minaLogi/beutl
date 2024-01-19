@@ -1,10 +1,10 @@
 ﻿using Avalonia.Controls;
 using Avalonia.Input;
 
-using Beutl.ProjectSystem;
 using Beutl.Operation;
-using Beutl.ViewModels.Tools;
+using Beutl.ProjectSystem;
 using Beutl.Services;
+using Beutl.ViewModels.Tools;
 
 namespace Beutl.Views.Tools;
 
@@ -56,9 +56,9 @@ public sealed partial class SourceOperatorsTab : UserControl
     {
         if (e.Data.Get(KnownLibraryItemFormats.SourceOperator) is Type item
             && DataContext is SourceOperatorsTabViewModel vm
-            && vm.Layer.Value is Element layer)
+            && vm.Element.Value is Element element)
         {
-            layer.Operation.AddChild((SourceOperator)Activator.CreateInstance(item)!)
+            element.Operation.AddChild((SourceOperator)Activator.CreateInstance(item)!)
                 .DoAndRecord(CommandRecorder.Default);
 
             e.Handled = true;

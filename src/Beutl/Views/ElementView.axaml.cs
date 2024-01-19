@@ -16,6 +16,8 @@ using Beutl.ViewModels.NodeTree;
 
 using FluentAvalonia.UI.Controls;
 
+using Reactive.Bindings.Extensions;
+
 using Setter = Avalonia.Styling.Setter;
 
 namespace Beutl.Views;
@@ -29,20 +31,20 @@ namespace Beutl.Views;
 
 public sealed partial class ElementView : UserControl
 {
+    private readonly CompositeDisposable _disposables = [];
     private Timeline? _timeline;
     private TimeSpan _pointerPosition;
-    private IDisposable? _disposable1;
     private static ColorPickerFlyout? s_colorPickerFlyout;
+    private _ResizeBehavior? _resizeBehavior;
 
     public ElementView()
     {
         InitializeComponent();
 
+        (border.ContextFlyout as FAMenuFlyout)!.Opening += OnContextFlyoutOpening;
         textBox.LostFocus += OnTextBoxLostFocus;
         this.SubscribeDataContextChange<ElementViewModel>(OnDataContextAttached, OnDataContextDetached);
     }
-
-    public Func<TimeSpan> GetClickedTime => () => _pointerPosition;
 
     private ElementViewModel ViewModel => (ElementViewModel)DataContext!;
 
@@ -51,9 +53,15 @@ public sealed partial class ElementView : UserControl
         base.OnKeyDown(e);
         if (DataContext is ElementViewModel viewModel)
         {
-            if(e.Key== Key.F2)
+            if (e.Key == Key.F2)
             {
                 Rename_Click(null, null!);
+                e.Handled = true;
+                return;
+            }
+            else if (e.Key == Key.LeftCtrl)
+            {
+                _resizeBehavior?.OnLeftCtrlPressed(e);
                 return;
             }
 
@@ -67,11 +75,20 @@ public sealed partial class ElementView : UserControl
         }
     }
 
+    private void OnContextFlyoutOpening(object? sender, EventArgs e)
+    {
+        if (DataContext is ElementViewModel viewModel)
+        {
+            change2OriginalLength.IsEnabled = viewModel.HasOriginalLength();
+            splitByCurrent.IsEnabled = viewModel.Model.Range.Contains(viewModel.Scene.CurrentFrame);
+        }
+    }
+
     private void OnDataContextDetached(ElementViewModel obj)
     {
         obj.AnimationRequested = (_, _) => Task.CompletedTask;
-        _disposable1?.Dispose();
-        _disposable1 = null;
+        obj.GetClickedTime = null;
+        _disposables.Clear();
     }
 
     private void OnDataContextAttached(ElementViewModel obj)
@@ -138,9 +155,17 @@ public sealed partial class ElementView : UserControl
                 await Task.WhenAll(task1, task2);
             });
         };
+        obj.GetClickedTime = () => _pointerPosition;
 
-        _disposable1 = obj.Model.GetObservable(Element.IsEnabledProperty)
-            .Subscribe(b => Dispatcher.UIThread.InvokeAsync(() => border.Opacity = b ? 1 : 0.5));
+        obj.Model.GetObservable(Element.IsEnabledProperty)
+            .ObserveOnUIDispatcher()
+            .Subscribe(b => border.Opacity = b ? 1 : 0.5)
+            .DisposeWith(_disposables);
+
+        obj.IsSelected
+            .ObserveOnUIDispatcher()
+            .Subscribe(v => ZIndex = v ? 5 : 0)
+            .DisposeWith(_disposables);
     }
 
     protected override void OnAttachedToLogicalTree(LogicalTreeAttachmentEventArgs e)
@@ -151,7 +176,7 @@ public sealed partial class ElementView : UserControl
         BehaviorCollection behaviors = Interaction.GetBehaviors(this);
         behaviors.Clear();
         behaviors.Add(new _SelectBehavior());
-        behaviors.Add(new _ResizeBehavior());
+        behaviors.Add(_resizeBehavior = new _ResizeBehavior());
         behaviors.Add(new _MoveBehavior());
     }
 
@@ -161,6 +186,7 @@ public sealed partial class ElementView : UserControl
         _timeline = null;
         BehaviorCollection behaviors = Interaction.GetBehaviors(this);
         behaviors.Clear();
+        _resizeBehavior = null;
     }
 
     protected override void OnPointerMoved(PointerEventArgs e)
@@ -237,9 +263,9 @@ public sealed partial class ElementView : UserControl
         Element model = ViewModel.Model;
         EditViewModel context = ViewModel.Timeline.EditorContext;
         NodeTreeTabViewModel? nodeTree = context.FindToolTab<NodeTreeTabViewModel>(
-            v => v.Layer.Value == model || v.Layer.Value == null);
+            v => v.Element.Value == model || v.Element.Value == null);
         nodeTree ??= new NodeTreeTabViewModel(context);
-        nodeTree.Layer.Value = model;
+        nodeTree.Element.Value = model;
 
         context.OpenToolTab(nodeTree);
     }
@@ -281,7 +307,18 @@ public sealed partial class ElementView : UserControl
         private Element? _before;
         private Element? _after;
         private bool _pressed;
+        private TimeSpan _recordedEndTime;
         private AlignmentX _resizeType;
+
+        public void OnLeftCtrlPressed(KeyEventArgs e)
+        {
+            if (AssociatedObject is { } view && !_pressed)
+            {
+                view.Cursor = null;
+                _resizeType = AlignmentX.Center;
+                e.Handled = true;
+            }
+        }
 
         protected override void OnAttached()
         {
@@ -318,6 +355,8 @@ public sealed partial class ElementView : UserControl
                 {
                     pointerFrame = view.RoundStartTime(pointerFrame, scale, e.KeyModifiers.HasFlag(KeyModifiers.Alt));
                     point = point.WithX(pointerFrame.ToPixel(scale));
+                    int rate = viewModel.Scene.FindHierarchicalParent<Project>() is { } proj ? proj.GetFrameRate() : 30;
+                    double minWidth = TimeSpan.FromSeconds(1d / rate).ToPixel(scale);
 
                     if (view.Cursor != Cursors.Arrow && view.Cursor is { })
                     {
@@ -327,15 +366,26 @@ public sealed partial class ElementView : UserControl
                         {
                             // 右
                             double x = _after == null ? point.X : Math.Min(_after.Start.ToPixel(scale), point.X);
-                            viewModel.Width.Value = x - left;
+                            viewModel.Width.Value = Math.Max(x - left, minWidth);
                         }
                         else if (_resizeType == AlignmentX.Left && pointerFrame >= TimeSpan.Zero)
                         {
                             // 左
                             double x = _before == null ? point.X : Math.Max(_before.Range.End.ToPixel(scale), point.X);
 
-                            viewModel.Width.Value += left - x;
-                            viewModel.BorderMargin.Value = new Thickness(x, 0, 0, 0);
+                            double endPos = _recordedEndTime.ToPixel(scale);
+
+                            double newWidth = endPos - x;
+                            if (minWidth < newWidth)
+                            {
+                                viewModel.Width.Value = newWidth;
+                                viewModel.BorderMargin.Value = new Thickness(x, 0, 0, 0);
+                            }
+                            else
+                            {
+                                viewModel.Width.Value = minWidth;
+                                viewModel.BorderMargin.Value = new Thickness(endPos - minWidth, 0, 0, 0);
+                            }
                         }
 
                         e.Handled = true;
@@ -346,7 +396,7 @@ public sealed partial class ElementView : UserControl
 
         private void OnBorderPointerPressed(object? sender, PointerPressedEventArgs e)
         {
-            if (AssociatedObject is { _timeline: { }, border: { } border, ViewModel: { } viewModel } view)
+            if (AssociatedObject is { _timeline: { }, ViewModel: { } viewModel } view)
             {
                 PointerPoint point = e.GetCurrentPoint(view.border);
                 if (point.Properties.IsLeftButtonPressed && e.KeyModifiers is KeyModifiers.None or KeyModifiers.Alt
@@ -354,6 +404,7 @@ public sealed partial class ElementView : UserControl
                 {
                     _before = viewModel.Model.GetBefore(viewModel.Model.ZIndex, viewModel.Model.Start);
                     _after = viewModel.Model.GetAfter(viewModel.Model.ZIndex, viewModel.Model.Range.End);
+                    _recordedEndTime = viewModel.Model.Range.End;
                     _pressed = true;
 
                     e.Handled = true;
@@ -379,7 +430,7 @@ public sealed partial class ElementView : UserControl
 
         private void OnBorderPointerMoved(object? sender, PointerEventArgs e)
         {
-            if (AssociatedObject is { border: { } border } view)
+            if (AssociatedObject is { border: { } border, ViewModel: { } viewModel } view)
             {
                 if (e.KeyModifiers is not (KeyModifiers.None or KeyModifiers.Alt))
                 {
@@ -388,16 +439,26 @@ public sealed partial class ElementView : UserControl
                 }
                 else if (!_pressed)
                 {
+                    float scale = viewModel.Timeline.Options.Value.Scale;
+                    int rate = viewModel.Scene.FindHierarchicalParent<Project>() is { } proj ? proj.GetFrameRate() : 30;
+                    double minWidth = TimeSpan.FromSeconds(1d / rate).ToPixel(scale);
+
                     Point point = e.GetPosition(border);
                     double horizon = point.X;
 
+                    double handleWidth = 10;
+                    if (border.Width <= minWidth)
+                    {
+                        handleWidth = minWidth / 2;
+                    }
+
                     // 左右 10px内 なら左右矢印
-                    if (horizon < 10)
+                    if (horizon < handleWidth)
                     {
                         view.Cursor = Cursors.SizeWestEast;
                         _resizeType = AlignmentX.Left;
                     }
-                    else if (horizon > border.Bounds.Width - 10)
+                    else if (horizon > border.Bounds.Width - handleWidth)
                     {
                         view.Cursor = Cursors.SizeWestEast;
                         _resizeType = AlignmentX.Right;
@@ -444,7 +505,6 @@ public sealed partial class ElementView : UserControl
             if (AssociatedObject is { ViewModel: { } viewModel } view
                 && view._timeline is { } timeline && _pressed)
             {
-                Scene scene = viewModel.Scene;
                 Point point = e.GetPosition(view);
                 float scale = viewModel.Timeline.Options.Value.Scale;
                 TimeSpan pointerFrame = point.X.ToTimeSpan(scale);
@@ -453,7 +513,7 @@ public sealed partial class ElementView : UserControl
 
                 TimeSpan newframe = pointerFrame - _start.X.ToTimeSpan(scale);
 
-                newframe = TimeSpan.FromTicks(Math.Clamp(newframe.Ticks, TimeSpan.Zero.Ticks, scene.Duration.Ticks));
+                newframe = TimeSpan.FromTicks(Math.Max(newframe.Ticks, TimeSpan.Zero.Ticks));
 
                 var newTop = Math.Max(e.GetPosition(timeline.TimelinePanel).Y - _start.Y, 0);
                 var newLeft = newframe.ToPixel(scale);
@@ -517,7 +577,7 @@ public sealed partial class ElementView : UserControl
                         int newIndex = viewModel.Timeline.ToLayerNumber(viewModel.Margin.Value);
                         int deltaIndex = newIndex - viewModel.Model.ZIndex;
 
-                        viewModel.Scene.MoveChildren(deltaIndex, deltaStart, elems.ToArray())
+                        viewModel.Scene.MoveChildren(deltaIndex, deltaStart, [.. elems])
                             .DoAndRecord(CommandRecorder.Default);
 
                         foreach (var (item, context) in animations)
@@ -541,7 +601,6 @@ public sealed partial class ElementView : UserControl
             if (AssociatedObject != null)
             {
                 AssociatedObject.AddHandler(PointerPressedEvent, OnPointerPressed, RoutingStrategies.Tunnel);
-                AssociatedObject.AddHandler(PointerReleasedEvent, OnPointerReleased, RoutingStrategies.Tunnel);
                 AssociatedObject.border.AddHandler(PointerPressedEvent, OnBorderPointerPressed);
                 AssociatedObject.border.AddHandler(PointerReleasedEvent, OnBorderPointerReleased);
             }
@@ -553,7 +612,6 @@ public sealed partial class ElementView : UserControl
             if (AssociatedObject != null)
             {
                 AssociatedObject.AddHandler(PointerPressedEvent, OnPointerPressed, RoutingStrategies.Tunnel);
-                AssociatedObject.AddHandler(PointerReleasedEvent, OnPointerReleased, RoutingStrategies.Tunnel);
                 AssociatedObject.border.RemoveHandler(PointerPressedEvent, OnBorderPointerPressed);
                 AssociatedObject.border.RemoveHandler(PointerReleasedEvent, OnBorderPointerReleased);
             }
@@ -563,19 +621,10 @@ public sealed partial class ElementView : UserControl
         {
             if (AssociatedObject is { } obj)
             {
-                obj.ZIndex = 5;
                 if (!obj.textBox.IsFocused)
                 {
                     obj.Focus();
                 }
-            }
-        }
-
-        private void OnPointerReleased(object? sender, PointerReleasedEventArgs e)
-        {
-            if (AssociatedObject is { } obj)
-            {
-                obj.ZIndex = 0;
             }
         }
 

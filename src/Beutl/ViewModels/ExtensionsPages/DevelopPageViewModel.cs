@@ -1,9 +1,9 @@
 ﻿using Beutl.Api;
 using Beutl.Api.Objects;
-using Beutl.Api.Services;
 
 using Beutl.ViewModels.ExtensionsPages.DevelopPages;
-using Beutl.ViewModels.ExtensionsPages.DevelopPages.Dialogs;
+
+using OpenTelemetry.Trace;
 
 using Reactive.Bindings;
 
@@ -11,10 +11,10 @@ using Serilog;
 
 namespace Beutl.ViewModels.ExtensionsPages;
 
-public sealed class DevelopPageViewModel : BasePageViewModel
+public sealed class DevelopPageViewModel : BasePageViewModel, ISupportRefreshViewModel
 {
     private readonly ILogger _logger = Log.ForContext<DevelopPageViewModel>();
-    private readonly CompositeDisposable _disposables = new();
+    private readonly CompositeDisposable _disposables = [];
     private readonly AuthorizedUser _user;
 
     public DevelopPageViewModel(AuthorizedUser user, BeutlApiApplication apiApplication)
@@ -24,25 +24,43 @@ public sealed class DevelopPageViewModel : BasePageViewModel
 
         Refresh.Subscribe(async () =>
         {
+            using Activity? activity = Services.Telemetry.StartActivity("DevelopPage.Refresh");
+
             try
             {
                 IsBusy.Value = true;
-                await _user.RefreshAsync();
+
                 Packages.Clear();
+                // for placeholder
+                Packages.AddRange(Enumerable.Repeat(new DummyItem(), 3));
 
-                int prevCount = 0;
-                int count = 0;
-
-                do
+                using (await _user.Lock.LockAsync())
                 {
-                    Package[] items = await _user.Profile.GetPackagesAsync(count, 30);
-                    Packages.AddRange(items.AsSpan());
-                    prevCount = items.Length;
-                    count += items.Length;
-                } while (prevCount == 30);
+                    activity?.AddEvent(new("Entered_AsyncLock"));
+
+                    await _user.RefreshAsync();
+
+                    int prevCount = 0;
+                    int count = 0;
+
+                    do
+                    {
+                        Package[] items = await _user.Profile.GetPackagesAsync(count, 30);
+                        if (count == 0)
+                        {
+                            Packages.Clear();
+                        }
+
+                        Packages.AddRange(items);
+                        prevCount = items.Length;
+                        count += items.Length;
+                    } while (prevCount == 30);
+                }
             }
             catch (Exception ex)
             {
+                activity?.SetStatus(ActivityStatusCode.Error);
+                activity?.RecordException(ex);
                 ErrorHandle(ex);
                 _logger.Error(ex, "An unexpected error has occurred.");
             }
@@ -55,7 +73,7 @@ public sealed class DevelopPageViewModel : BasePageViewModel
         Refresh.Execute();
     }
 
-    public CoreList<Package> Packages { get; } = new();
+    public CoreList<object> Packages { get; } = [];
 
     public ReactivePropertySlim<bool> IsBusy { get; } = new();
 

@@ -6,13 +6,13 @@ using Beutl.Media.Pixel;
 
 namespace Beutl.Media.Source;
 
+[EditorBrowsable(EditorBrowsableState.Never)]
+[Obsolete("Use the Open method of each MediaSource.")]
 public class MediaSourceManager
 {
-    private readonly Dictionary<string, Ref<MediaReader>> _mediaReaders = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, Ref<IBitmap>> _bitmaps = new(StringComparer.Ordinal);
-
     public static readonly MediaSourceManager Shared = new();
 
+    [Obsolete("Use VideoSource.Open")]
     public bool OpenVideoSource(string name, [NotNullWhen(true)] out IVideoSource? value)
     {
         value = null;
@@ -24,6 +24,7 @@ public class MediaSourceManager
         return value != null;
     }
 
+    [Obsolete("Use SoundSource.Open")]
     public bool OpenSoundSource(string name, [NotNullWhen(true)] out ISoundSource? value)
     {
         value = null;
@@ -35,6 +36,7 @@ public class MediaSourceManager
         return value != null;
     }
 
+    [Obsolete("Use BitmapSource.Open")]
     public bool OpenImageSource(string name, [NotNullWhen(true)] out IImageSource? value)
     {
         value = null;
@@ -46,123 +48,74 @@ public class MediaSourceManager
         return value != null;
     }
 
-    [EditorBrowsable(EditorBrowsableState.Never)]
+    [Obsolete("Do not use.")]
     public bool TryGetMediaReader(string name, [NotNullWhen(true)] out Ref<MediaReader>? value)
     {
-        value = null;
-        if (_mediaReaders.TryGetValue(name, out Ref<MediaReader>? result))
-        {
-            value = result.Clone();
-        }
-
-        return value != null;
+        return TryGetMediaReaderOrOpen(name, out value);
     }
 
-    [EditorBrowsable(EditorBrowsableState.Never)]
+    [Obsolete("Do not use.")]
     public bool TryGetMediaReaderOrOpen(string fileName, [NotNullWhen(true)] out Ref<MediaReader>? value)
     {
-        value = null;
-        if (_mediaReaders.TryGetValue(fileName, out Ref<MediaReader>? result))
+        try
         {
-            value = result.Clone();
+            var reader = MediaReader.Open(fileName);
+            value = Ref<MediaReader>.Create(reader);
+            return true;
         }
-        else
+        catch
         {
-            try
-            {
-                var reader = MediaReader.Open(fileName);
-
-                value = Ref<MediaReader>.Create(reader, () => _mediaReaders.Remove(fileName));
-                _mediaReaders.Add(fileName, value);
-            }
-            catch
-            {
-            }
+            value = null;
+            return false;
         }
-
-        return value != null;
     }
 
-    [EditorBrowsable(EditorBrowsableState.Never)]
+    [Obsolete("Do not use.")]
     public bool TryGetBitmap(string name, [NotNullWhen(true)] out Ref<IBitmap>? value)
     {
-        value = null;
-        if (_bitmaps.TryGetValue(name, out Ref<IBitmap>? result))
-        {
-            value = result.Clone();
-        }
-
-        return value != null;
+        return TryGetBitmapOrOpen(name, out value);
     }
 
-    [EditorBrowsable(EditorBrowsableState.Never)]
+    [Obsolete("Do not use.")]
     public bool TryGetBitmapOrOpen(string fileName, [NotNullWhen(true)] out Ref<IBitmap>? value)
     {
-        value = null;
-        if (_bitmaps.TryGetValue(fileName, out Ref<IBitmap>? result))
+        try
         {
-            value = result.Clone();
+            var bitmap = Bitmap<Bgra8888>.FromFile(fileName);
+            value = Ref<IBitmap>.Create(bitmap);
+            return true;
         }
-        else
+        catch
         {
-            try
-            {
-                var bitmap = Bitmap<Bgra8888>.FromFile(fileName);
-
-                value = Ref<IBitmap>.Create(bitmap, () => _bitmaps.Remove(fileName));
-                _bitmaps.Add(fileName, value);
-            }
-            catch
-            {
-            }
+            value = null;
+            return false;
         }
 
-        return value != null;
     }
 
     // 移譲する側は今後、valueを直接参照しない。
-    [EditorBrowsable(EditorBrowsableState.Never)]
+    [Obsolete("Do not use.")]
     public Ref<MediaReader>? TryTransferMediaReader(string name, MediaReader mediaReader)
     {
-        if (mediaReader.IsDisposed
-            || _mediaReaders.ContainsKey(name)
-            || _mediaReaders.Values.Any(x => ReferenceEquals(x.Value, mediaReader)))
-        {
-            return null;
-        }
-        else
-        {
-            var @ref = Ref<MediaReader>.Create(mediaReader, () => _mediaReaders.Remove(name));
-            _mediaReaders.Add(name, @ref);
-            return @ref;
-        }
+        return Ref<MediaReader>.Create(mediaReader);
     }
 
     // 移譲する側は今後、valueを直接参照しない。
-    [EditorBrowsable(EditorBrowsableState.Never)]
+    [Obsolete("Do not use.")]
     public Ref<IBitmap>? TryTransferBitmap(string name, IBitmap bitmap)
     {
-        if (bitmap.IsDisposed
-            || _bitmaps.ContainsKey(name)
-            || _bitmaps.Values.Any(x => ReferenceEquals(x.Value, bitmap)))
-        {
-            return null;
-        }
-        else
-        {
-            var @ref = Ref<IBitmap>.Create(bitmap, () => _bitmaps.Remove(name));
-            _bitmaps.Add(name, @ref);
-            return @ref;
-        }
+        return Ref<IBitmap>.Create(bitmap);
     }
 
+    [Obsolete("Do not use.")]
     public bool ContainsMediaReader(string name)
     {
-        return _mediaReaders.ContainsKey(name);
+        return false;
     }
 
+    [Obsolete("Do not use.")]
     public bool ContainsBitmap(string name)
     {
-        return _bitmaps.ContainsKey(name);
+        return false;
     }
 }

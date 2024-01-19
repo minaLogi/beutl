@@ -32,22 +32,16 @@
     </UserControl.Styles>
 
     <Grid RowDefinitions="Auto,*,Auto">
-        <StackPanel Margin="10,8"
-                    Orientation="Horizontal"
-                    Spacing="16">
-            <Button Classes="breadcrumb"
-                    Click="NavigatePackageDetailsPage_Click"
-                    Content="{CompiledBinding Release.Package.Name}" />
+        <StackPanel Margin="10,8" Classes="simple-breadcrumb-bar">
+            <Button Click="NavigatePackageDetailsPage_Click" Content="{CompiledBinding Release.Package.Name}" />
 
-            <Label Classes="breadcrumb" />
+            <Separator />
 
-            <Button Classes="breadcrumb"
-                    Click="NavigatePackageReleasesPage_Click"
-                    Content="{x:Static lang:ExtensionsPage.Package_Releases_Tip}" />
+            <Button Click="NavigatePackageReleasesPage_Click" Content="{x:Static lang:ExtensionsPage.Package_Releases_Tip}" />
 
-            <Label Classes="breadcrumb" />
+            <Separator />
 
-            <TextBlock Classes="breadcrumb" Text="{CompiledBinding Release.Version.Value}" />
+            <TextBlock Text="{CompiledBinding Release.Version.Value}" />
         </StackPanel>
 
 
@@ -74,21 +68,43 @@
                                    TextTrimming="CharacterEllipsis" />
                     </ctrls:OptionsDisplayItem.ActionButton>
                     <ctrls:OptionsDisplayItem.Content>
-                        <TextBox AcceptsReturn="True"
-                                 Classes="customStyle"
+                        <TextBox MaxHeight="160"
+                                 Margin="44,0"
+                                 AcceptsReturn="True"
+                                 AcceptsTab="True"
                                  Text="{CompiledBinding Body.Value}" />
                     </ctrls:OptionsDisplayItem.Content>
                 </ctrls:OptionsDisplayItem>
 
-                <ctrls:OptionsDisplayItem Description="{x:Static lang:ExtensionsPage.Release_Asset_Tip}" Header="{x:Static lang:ExtensionsPage.Release_Asset}">
+                <ctrls:OptionsDisplayItem Clickable="False"
+                                          Description="{x:Static lang:ExtensionsPage.Release_TargetVersion_Tip}"
+                                          Header="{x:Static lang:ExtensionsPage.Release_TargetVersion}">
+                    <ctrls:OptionsDisplayItem.ActionButton>
+                        <TextBox VerticalAlignment="Center"
+                                 Classes="customStyle"
+                                 Text="{CompiledBinding TargetVersion.Value}" />
+                    </ctrls:OptionsDisplayItem.ActionButton>
+                </ctrls:OptionsDisplayItem>
+
+                <ctrls:OptionsDisplayItem Clickable="False"
+                                          Description="{x:Static lang:ExtensionsPage.Release_Asset_Tip}"
+                                          Header="{x:Static lang:ExtensionsPage.Release_Asset}">
                     <ctrls:OptionsDisplayItem.ActionButton>
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <TextBlock VerticalAlignment="Center"
                                        Classes="description"
                                        Text="{CompiledBinding ActualAsset.Value.Name}" />
+
+                            <ProgressRing Width="16"
+                                          Height="16"
+                                          BorderThickness="4"
+                                          IsIndeterminate="{CompiledBinding IsAssetLoading.Value}"
+                                          IsVisible="{CompiledBinding IsAssetLoading.Value}" />
+
                             <Button Classes="accent"
                                     Click="SelectAsset_Click"
-                                    Content="{x:Static lang:Strings.Open}" />
+                                    Content="{x:Static lang:Strings.Open}"
+                                    IsEnabled="{CompiledBinding !IsAssetLoading.Value}" />
                         </StackPanel>
                     </ctrls:OptionsDisplayItem.ActionButton>
                 </ctrls:OptionsDisplayItem>
@@ -141,5 +157,8 @@
             </StackPanel>
         </Border>
 
+        <ProgressRing Grid.RowSpan="3"
+                      IsIndeterminate="{CompiledBinding IsBusy.Value}"
+                      IsVisible="{CompiledBinding IsBusy.Value}" />
     </Grid>
 </UserControl>

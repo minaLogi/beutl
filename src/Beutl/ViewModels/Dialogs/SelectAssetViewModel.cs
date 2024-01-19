@@ -6,11 +6,11 @@ using Beutl.Api.Objects;
 using Beutl.Services;
 using Beutl.Utilities;
 
+using OpenTelemetry.Trace;
+
 using Reactive.Bindings;
 
 using Serilog;
-
-using static Beutl.ViewModels.SettingsPages.StorageSettingsPageViewModel;
 
 namespace Beutl.ViewModels.Dialogs;
 
@@ -32,27 +32,33 @@ public class SelectAssetViewModel
 
         Refresh.Subscribe(async () =>
         {
+            using Activity? activity = Telemetry.StartActivity("SelectAsset.Refresh");
             try
             {
                 IsBusy.Value = true;
-                await _user.RefreshAsync();
-
-                Items.Clear();
-
-                int prevCount = 0;
-                int count = 0;
-
-                do
+                using (await _user.Lock.LockAsync())
                 {
-                    Asset[] items = await _user.Profile.GetAssetsAsync(count, 30);
-                    Items.AddRange(items.Where(x => _contentTypeFilter(x.ContentType))
-                        .Select(x => new AssetViewModel(x, x.Size.HasValue ? StringFormats.ToHumanReadableSize(x.Size.Value) : string.Empty)));
-                    prevCount = items.Length;
-                    count += items.Length;
-                } while (prevCount == 30);
+                    await _user.RefreshAsync();
+
+                    Items.Clear();
+
+                    int prevCount = 0;
+                    int count = 0;
+
+                    do
+                    {
+                        Asset[] items = await _user.Profile.GetAssetsAsync(count, 30);
+                        Items.AddRange(items.Where(x => _contentTypeFilter(x.ContentType))
+                            .Select(x => new AssetViewModel(x, x.Size.HasValue ? StringFormats.ToHumanReadableSize(x.Size.Value) : string.Empty)));
+                        prevCount = items.Length;
+                        count += items.Length;
+                    } while (prevCount == 30);
+                }
             }
             catch (Exception ex)
             {
+                activity?.SetStatus(ActivityStatusCode.Error);
+                activity?.RecordException(ex);
                 _logger.Error(ex, "An exception occurred while loading the list of assets.");
                 NotificationService.ShowError(string.Empty, Message.OperationCouldNotBeExecuted);
             }
@@ -65,7 +71,7 @@ public class SelectAssetViewModel
         Refresh.Execute();
     }
 
-    public AvaloniaList<AssetViewModel> Items { get; } = new();
+    public AvaloniaList<AssetViewModel> Items { get; } = [];
 
     public ReactivePropertySlim<AssetViewModel?> SelectedItem { get; } = new();
 

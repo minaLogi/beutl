@@ -6,6 +6,7 @@ using Beutl.Media.Pixel;
 using Microsoft.Extensions.Logging;
 
 using NUnit.Framework;
+using NUnit.Framework.Legacy;
 
 namespace Beutl.Graphics.UnitTests;
 
@@ -38,7 +39,7 @@ public class ShapeTests
 
         using Bitmap<Bgra8888> bmp = canvas.GetBitmap();
 
-        Assert.IsTrue(bmp.Save(Path.Combine(ArtifactProvider.GetArtifactDirectory(), $"0.png"), EncodedImageFormat.Png));
+        ClassicAssert.IsTrue(bmp.Save(Path.Combine(ArtifactProvider.GetArtifactDirectory(), $"0.png"), EncodedImageFormat.Png));
     }
 
     [Test]
@@ -59,10 +60,7 @@ public class ShapeTests
                 Brush = Brushes.White,
                 Thickness = 10,
                 StrokeCap = StrokeCap.Round,
-                DashArray = new CoreList<float>()
-                {
-                    2
-                },
+                DashArray = [2],
             }
         };
 
@@ -74,7 +72,7 @@ public class ShapeTests
 
         using Bitmap<Bgra8888> bmp = canvas.GetBitmap();
 
-        Assert.IsTrue(bmp.Save(Path.Combine(ArtifactProvider.GetArtifactDirectory(), $"0.png"), EncodedImageFormat.Png));
+        ClassicAssert.IsTrue(bmp.Save(Path.Combine(ArtifactProvider.GetArtifactDirectory(), $"0.png"), EncodedImageFormat.Png));
     }
 
     [Test]
@@ -98,7 +96,7 @@ public class ShapeTests
 
         using Bitmap<Bgra8888> bmp = canvas.GetBitmap();
 
-        Assert.IsTrue(bmp.Save(Path.Combine(ArtifactProvider.GetArtifactDirectory(), $"0.png"), EncodedImageFormat.Png));
+        ClassicAssert.IsTrue(bmp.Save(Path.Combine(ArtifactProvider.GetArtifactDirectory(), $"0.png"), EncodedImageFormat.Png));
     }
 
     [Test]
@@ -124,7 +122,7 @@ public class ShapeTests
 
         using Bitmap<Bgra8888> bmp = canvas.GetBitmap();
 
-        Assert.IsTrue(bmp.Save(Path.Combine(ArtifactProvider.GetArtifactDirectory(), $"0.png"), EncodedImageFormat.Png));
+        ClassicAssert.IsTrue(bmp.Save(Path.Combine(ArtifactProvider.GetArtifactDirectory(), $"0.png"), EncodedImageFormat.Png));
     }
 
     [Test]
@@ -160,7 +158,7 @@ public class ShapeTests
 
         using Bitmap<Bgra8888> bmp = canvas.GetBitmap();
 
-        Assert.IsTrue(bmp.Save(Path.Combine(ArtifactProvider.GetArtifactDirectory(), $"{alignment}.png"), EncodedImageFormat.Png));
+        ClassicAssert.IsTrue(bmp.Save(Path.Combine(ArtifactProvider.GetArtifactDirectory(), $"{alignment}.png"), EncodedImageFormat.Png));
     }
 
     [Test]
@@ -196,7 +194,7 @@ public class ShapeTests
 
         using Bitmap<Bgra8888> bmp = canvas.GetBitmap();
 
-        Assert.IsTrue(bmp.Save(Path.Combine(ArtifactProvider.GetArtifactDirectory(), $"0.png"), EncodedImageFormat.Png));
+        ClassicAssert.IsTrue(bmp.Save(Path.Combine(ArtifactProvider.GetArtifactDirectory(), $"0.png"), EncodedImageFormat.Png));
     }
 
     [Test]
@@ -249,6 +247,6 @@ public class ShapeTests
 
         using Bitmap<Bgra8888> bmp = canvas.GetBitmap();
 
-        Assert.IsTrue(bmp.Save(Path.Combine(ArtifactProvider.GetArtifactDirectory(), $"{alignment}_{fillType}.png"), EncodedImageFormat.Png));
+        ClassicAssert.IsTrue(bmp.Save(Path.Combine(ArtifactProvider.GetArtifactDirectory(), $"{alignment}_{fillType}.png"), EncodedImageFormat.Png));
     }
 }

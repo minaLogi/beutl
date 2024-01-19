@@ -29,6 +29,7 @@ public static class UnhandledExceptionHandler
             if (e.ExceptionObject is Exception ex)
             {
                 Log.Fatal(ex, "An unhandled exception occurred. (IsTerminating: {IsTerminating})", e.IsTerminating);
+                Telemetry.Exception(ex, true);
                 SaveException(ex);
 
                 //var stack = new StackTrace();
@@ -43,7 +44,7 @@ public static class UnhandledExceptionHandler
                 OperatingSystem.IsWindows() ? "Beutl.ExceptionHandler.exe" : "Beutl.ExceptionHandler");
             Process.Start(new ProcessStartInfo(exePath)
             {
-                UseShellExecute = true,
+                UseShellExecute = true
             });
         }
         catch

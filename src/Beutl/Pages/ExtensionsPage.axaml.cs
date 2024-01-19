@@ -1,13 +1,14 @@
 ﻿using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.Documents;
 using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
 
 using Beutl.Pages.ExtensionsPages;
 using Beutl.Pages.ExtensionsPages.DevelopPages;
 using Beutl.Pages.ExtensionsPages.DiscoverPages;
+using Beutl.Services;
 using Beutl.ViewModels;
+using Beutl.ViewModels.ExtensionsPages;
 using Beutl.ViewModels.ExtensionsPages.DiscoverPages;
 using Beutl.Views;
 
@@ -33,21 +34,21 @@ public sealed partial class ExtensionsPage : UserControl
         nav.BackRequested += Nav_BackRequested;
 
         nav.SelectedItem = selected;
+    }
 
-        this.GetObservable(IsVisibleProperty).Subscribe(b =>
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        if (nav.SelectedItem is NavigationViewItem selected)
         {
-            if (b)
-            {
-                if (nav.SelectedItem is NavigationViewItem selected)
-                {
-                    OnItemInvoked(selected);
-                }
-            }
-            else
-            {
-                frame.SetNavigationState("|\n0\n0");
-            }
-        });
+            OnItemInvoked(selected);
+        }
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
+        frame.SetNavigationState("|\n0\n0");
     }
 
     private void Search_Click(object? sender, RoutedEventArgs e)
@@ -57,7 +58,7 @@ public sealed partial class ExtensionsPage : UserControl
 
     private void OpenSettings_Click(object? sender, RoutedEventArgs e)
     {
-        if (this.FindLogicalAncestorOfType<MainView>() is { DataContext: MainViewModel viewModel } mainView)
+        if (this.FindLogicalAncestorOfType<MainView>() is { DataContext: MainViewModel viewModel })
         {
             viewModel.SelectedPage.Value = viewModel.SettingsPage;
         }
@@ -65,8 +66,8 @@ public sealed partial class ExtensionsPage : UserControl
 
     private static List<NavigationViewItem> GetItems()
     {
-        return new List<NavigationViewItem>()
-        {
+        return
+        [
             new NavigationViewItem()
             {
                 Content = "Home",
@@ -94,7 +95,7 @@ public sealed partial class ExtensionsPage : UserControl
                     Symbol = Symbol.Code
                 }
             }
-        };
+        ];
     }
 
     private void Nav_BackRequested(object? sender, NavigationViewBackRequestedEventArgs e)
@@ -133,6 +134,17 @@ public sealed partial class ExtensionsPage : UserControl
 
     private void Frame_Navigating(object sender, NavigatingCancelEventArgs e)
     {
+        Telemetry.NavigateExtensionsPage(e.SourcePageType.Name);
+        Type type1 = frame.CurrentSourcePageType;
+        Type type2 = e.SourcePageType;
+
+        if (type1 == type2
+            && frame.Content is Control { DataContext: ISupportRefreshViewModel { Refresh: { } refreshCommand } }
+            && refreshCommand.CanExecute())
+        {
+            refreshCommand.Execute();
+        }
+
         if (e.NavigationTransitionInfo is EntranceNavigationTransitionInfo entrance)
         {
             if (e.NavigationMode is NavigationMode.Back)
@@ -145,8 +157,6 @@ public sealed partial class ExtensionsPage : UserControl
             }
             else
             {
-                Type type1 = frame.CurrentSourcePageType;
-                Type type2 = e.SourcePageType;
                 int num1 = ToNumber(type1);
                 int num2 = ToNumber(type2);
                 if (num1 > num2)
@@ -164,7 +174,7 @@ public sealed partial class ExtensionsPage : UserControl
 
     private void Frame_Navigated(object sender, NavigationEventArgs e)
     {
-        foreach (NavigationViewItem nvi in nav.MenuItems)
+        foreach (NavigationViewItem nvi in nav.MenuItems.OfType<NavigationViewItem>())
         {
             if (nvi.Tag is Type tag && tag == e.SourcePageType)
             {
@@ -173,7 +183,7 @@ public sealed partial class ExtensionsPage : UserControl
             }
         }
 
-        foreach (NavigationViewItem nvi in nav.MenuItems)
+        foreach (NavigationViewItem nvi in nav.MenuItems.OfType<NavigationViewItem>())
         {
             if (nvi.Tag is Type tag && e.SourcePageType.Namespace?.EndsWith($"{tag.Name}s") == true)
             {
@@ -185,18 +195,32 @@ public sealed partial class ExtensionsPage : UserControl
 
     private static int ToNumber(Type type)
     {
-        if (type == typeof(DevelopPage) || type == typeof(DiscoverPage))
+        if (type == typeof(DevelopPage)
+            || type == typeof(DiscoverPage))
+        {
             return 0;
+        }
         else if (type == typeof(PackageDetailsPage)
             || type == typeof(PublicPackageDetailsPage)
             || type == typeof(RankingPageViewModel))
+        {
             return 1;
+        }
         else if (type == typeof(PackageReleasesPage))
+        {
             return 2;
+        }
         else if (type == typeof(PackageSettingsPage))
+        {
             return 2;
+        }
         else if (type == typeof(ReleasePage))
+        {
             return 3;
-        return -1;
+        }
+        else
+        {
+            return -1;
+        }
     }
 }

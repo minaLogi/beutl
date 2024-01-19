@@ -1,0 +1,99 @@
+<UserControl x:Class="Beutl.Pages.SettingsPages.EditorSettingsPage"
+             xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ctrls="using:Beutl.Controls"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:icons="using:FluentIcons.FluentAvalonia"
+             xmlns:lang="using:Beutl.Language"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:ui="using:FluentAvalonia.UI.Controls"
+             xmlns:vm="using:Beutl.ViewModels.SettingsPages"
+             x:Name="root"
+             d:DesignHeight="450"
+             d:DesignWidth="800"
+             x:DataType="vm:EditorSettingsPageViewModel"
+             mc:Ignorable="d">
+    <Grid Margin="18" RowDefinitions="Auto,*">
+
+        <TextBlock Margin="10,8"
+                   Text="{x:Static lang:Strings.Editor}"
+                   Theme="{StaticResource SimpleLargeBreadcrumbBarTextBlock}" />
+
+        <ScrollViewer Grid.Row="1">
+            <StackPanel Margin="10,16,10,0"
+                        VerticalAlignment="Stretch"
+                        Orientation="Vertical"
+                        Spacing="4">
+                <ctrls:OptionsDisplayItem Description="{x:Static lang:SettingsPage.AutoAdjustSceneDuration_Description}" Header="{x:Static lang:SettingsPage.AutoAdjustSceneDuration}">
+                    <ctrls:OptionsDisplayItem.ActionButton>
+                        <ToggleSwitch Classes="left"
+                                      IsChecked="{CompiledBinding AutoAdjustSceneDuration.Value}"
+                                      Theme="{StaticResource CompactToggleSwitchStyle}" />
+                    </ctrls:OptionsDisplayItem.ActionButton>
+                </ctrls:OptionsDisplayItem>
+
+                <ctrls:OptionsDisplayItem Description="{x:Static lang:SettingsPage.EnablePointerLockInProperty_Description}" Header="{x:Static lang:SettingsPage.EnablePointerLockInProperty}">
+                    <ctrls:OptionsDisplayItem.ActionButton>
+                        <ToggleSwitch Classes="left"
+                                      IsChecked="{CompiledBinding EnablePointerLockInProperty.Value}"
+                                      Theme="{StaticResource CompactToggleSwitchStyle}" />
+                    </ctrls:OptionsDisplayItem.ActionButton>
+                </ctrls:OptionsDisplayItem>
+
+                <ctrls:OptionsDisplayItem Description="{x:Static lang:SettingsPage.ShowExactBoundaries_Description}" Header="{x:Static lang:SettingsPage.ShowExactBoundaries}">
+                    <ctrls:OptionsDisplayItem.ActionButton>
+                        <ToggleSwitch Classes="left"
+                                      IsChecked="{CompiledBinding ShowExactBoundaries.Value}"
+                                      Theme="{StaticResource CompactToggleSwitchStyle}" />
+                    </ctrls:OptionsDisplayItem.ActionButton>
+                </ctrls:OptionsDisplayItem>
+
+                <!--  終了しなくても、新しい要素では変更が反映されている  -->
+                <ctrls:OptionsDisplayItem Description="{x:Static lang:SettingsPage.HidePrimaryProperties_Description}" Header="{x:Static lang:SettingsPage.HidePrimaryProperties}">
+                    <ctrls:OptionsDisplayItem.ActionButton>
+                        <ToggleSwitch Classes="left"
+                                      IsChecked="{CompiledBinding HidePrimaryProperties.Value}"
+                                      Theme="{StaticResource CompactToggleSwitchStyle}" />
+                    </ctrls:OptionsDisplayItem.ActionButton>
+                </ctrls:OptionsDisplayItem>
+
+                <ctrls:OptionsDisplayItem Description="{x:Static lang:SettingsPage.ChangePrimaryPropertiesToBeHidden}"
+                                          Expands="True"
+                                          Header="{x:Static lang:SettingsPage.PrimaryProperties}"
+                                          IsEnabled="{Binding HidePrimaryProperties.Value}">
+                    <ctrls:OptionsDisplayItem.Content>
+                        <Grid RowDefinitions="Auto,*">
+                            <ui:CommandBar DefaultLabelPosition="Right">
+                                <ui:CommandBar.PrimaryCommands>
+                                    <ui:CommandBarButton Click="AddPrimaryPropertyClick"
+                                                         IconSource="Add"
+                                                         Label="{x:Static lang:Strings.Add}" />
+
+                                    <ui:CommandBarButton Command="{Binding RemovePrimaryProperty}"
+                                                         CommandParameter="{Binding #primaryPropsList.SelectedItem}"
+                                                         IconSource="Delete"
+                                                         IsEnabled="{Binding #primaryPropsList.SelectedItem, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                                         Label="{x:Static lang:Strings.Remove}" />
+                                </ui:CommandBar.PrimaryCommands>
+
+                                <ui:CommandBar.SecondaryCommands>
+                                    <ui:CommandBarButton Command="{Binding ResetPrimaryProperty}" Label="{x:Static lang:Strings.Reset}" />
+                                </ui:CommandBar.SecondaryCommands>
+                            </ui:CommandBar>
+
+                            <ListBox x:Name="primaryPropsList"
+                                     Grid.Row="1"
+                                     ItemsSource="{Binding PrimaryProperties}">
+                                <ListBox.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel />
+                                    </ItemsPanelTemplate>
+                                </ListBox.ItemsPanel>
+                            </ListBox>
+                        </Grid>
+                    </ctrls:OptionsDisplayItem.Content>
+                </ctrls:OptionsDisplayItem>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

@@ -2,6 +2,9 @@
 
 using Beutl.Api;
 using Beutl.Api.Objects;
+using Beutl.Services;
+
+using OpenTelemetry.Trace;
 
 using Reactive.Bindings;
 
@@ -11,7 +14,7 @@ namespace Beutl.ViewModels.Dialogs;
 
 public class CreateAssetViewModel
 {
-    private readonly ILogger _logger=Log.ForContext<CreateAssetViewModel>(); 
+    private readonly ILogger _logger = Log.ForContext<CreateAssetViewModel>();
     private readonly AuthorizedUser _user;
     private CancellationTokenSource? _cts;
 
@@ -64,7 +67,7 @@ public class CreateAssetViewModel
 
         CloseButtonText = PageIndex.CombineLatest(Submitting)
             .Select(x => x.First is >= 0 and <= 2 || x.Second ? Strings.Cancel : Strings.Close)
-            .ToReadOnlyReactivePropertySlim()!;
+            .ToReadOnlyReactivePropertySlim(Strings.Close)!;
 
         UseInternalServer = SelectedMethod.Select(x => x == 0).ToReadOnlyReactivePropertySlim();
         UseExternalServer = SelectedMethod.Select(x => x == 1).ToReadOnlyReactivePropertySlim();
@@ -72,7 +75,6 @@ public class CreateAssetViewModel
         File.SetValidateNotifyError(file => !System.IO.File.Exists(file) ? Message.FileDoesNotExist : null);
         Url.SetValidateNotifyError(url => url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
             || url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
-            || url.StartsWith("ftp://", StringComparison.OrdinalIgnoreCase)
                 ? null!
                 : Message.InvalidUrl);
         _user = user;
@@ -92,8 +94,11 @@ public class CreateAssetViewModel
 
             try
             {
-                _ = await _user.Profile.GetAssetAsync(x);
-                return Message.ItAlreadyExists;
+                using (await _user.Lock.LockAsync())
+                {
+                    _ = await _user.Profile.GetAssetAsync(x);
+                    return Message.ItAlreadyExists;
+                }
             }
             catch
             {
@@ -144,42 +149,51 @@ public class CreateAssetViewModel
 
     public async Task SubmitAsync()
     {
+        using Activity? activity = Telemetry.StartActivity("CreateAsset.Submit");
         try
         {
             _cts = new CancellationTokenSource();
             CancellationToken cancellationToken = _cts.Token;
 
             Submitting.Value = true;
-            await _user.RefreshAsync();
-            if (SelectedMethod.Value == 0)
+            using (await _user.Lock.LockAsync(cancellationToken))
             {
-                ProgressStatus.Value = Strings.CreateAsset_UploadingFiles;
-                using FileStream stream = System.IO.File.OpenRead(File.Value);
-                _ = RunProgressReporter(stream, cancellationToken);
-                Result = await _user.Profile.AddAssetAsync(Name.Value, stream, ContentType.Value);
-            }
-            else
-            {
-                ProgressStatus.Value = Strings.CreateAsset_PerformingAnOperation;
-                Result = await _user.Profile.AddAssetAsync(Name.Value, new CreateVirtualAssetRequest()
+                await _user.RefreshAsync();
+                if (SelectedMethod.Value == 0)
                 {
-                    ContentType = ContentType.Value,
-                    Url = Url.Value,
-                    Sha256 = Sha256.Value,
-                    Sha384 = Sha384.Value,
-                    Sha512 = Sha512.Value,
-                });
-            }
+                    ProgressStatus.Value = Strings.CreateAsset_UploadingFiles;
+                    using FileStream stream = System.IO.File.OpenRead(File.Value);
+                    _ = RunProgressReporter(stream, cancellationToken);
+                    Result = await _user.Profile.AddAssetAsync(Name.Value, stream, ContentType.Value);
+                }
+                else
+                {
+                    ProgressStatus.Value = Strings.CreateAsset_PerformingAnOperation;
+                    Result = await _user.Profile.AddAssetAsync(Name.Value, new CreateVirtualAssetRequest()
+                    {
+                        ContentType = ContentType.Value,
+                        Url = Url.Value,
+                        Sha256 = Sha256.Value,
+                        Sha384 = Sha384.Value,
+                        Sha512 = Sha512.Value,
+                    });
+                }
+                await Result.UpdateAsync(true);
 
-            ProgressStatus.Value = Strings.CreateAsset_Completed;
+                ProgressStatus.Value = Strings.CreateAsset_Completed;
+            }
         }
         catch (BeutlApiException<ApiErrorResponse> ex)
         {
+            activity?.SetStatus(ActivityStatusCode.Error);
+            activity?.RecordException(ex);
             ProgressStatus.Value = Message.AnUnexpectedErrorHasOccurred;
             Error.Value = ex.Result.Message;
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
+            activity?.SetStatus(ActivityStatusCode.Error);
+            activity?.RecordException(e);
             _logger.Error(e, "Failed to upload a file.");
             ProgressStatus.Value = Message.AnUnexpectedErrorHasOccurred;
             Error.Value = e.Message;

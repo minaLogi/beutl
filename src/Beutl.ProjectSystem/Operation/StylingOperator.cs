@@ -8,9 +8,12 @@ using System.Reflection;
 using System.Text.Json.Nodes;
 
 using Beutl.Animation;
+using Beutl.Audio;
 using Beutl.Extensibility;
+using Beutl.Graphics;
 using Beutl.Media;
 using Beutl.Reactive;
+using Beutl.Serialization;
 using Beutl.Styling;
 
 using static Beutl.Operation.StylingOperatorPropertyDefinition;
@@ -24,7 +27,7 @@ public interface IStylingSetterPropertyImpl : IAbstractProperty
     IStyle Style { get; }
 }
 
-public sealed class StylingSetterPropertyImpl<T> : IAbstractAnimatableProperty<T>, IStylingSetterPropertyImpl
+public sealed class StylingSetterPropertyImpl<T>(Setter<T> setter, Style style) : IAbstractAnimatableProperty<T>, IStylingSetterPropertyImpl
 {
     private sealed class AnimationObservable : LightweightObservableBase<IAnimation<T>?>
     {
@@ -34,6 +37,7 @@ public sealed class StylingSetterPropertyImpl<T> : IAbstractAnimatableProperty<T
         public AnimationObservable(Setter<T> setter)
         {
             _setter = setter;
+            _prevAnimation = setter.Animation;
         }
 
         protected override void Subscribed(IObserver<IAnimation<T>?> observer, bool first)
@@ -62,19 +66,11 @@ public sealed class StylingSetterPropertyImpl<T> : IAbstractAnimatableProperty<T
         }
     }
 
-    public StylingSetterPropertyImpl(Setter<T> setter, Style style)
-    {
-        Property = setter.Property;
-        Setter = setter;
-        Style = style;
-        ObserveAnimation = new AnimationObservable(setter);
-    }
+    public CoreProperty<T> Property { get; } = setter.Property;
 
-    public CoreProperty<T> Property { get; }
+    public Setter<T> Setter { get; } = setter;
 
-    public Setter<T> Setter { get; }
-
-    public Style Style { get; }
+    public Style Style { get; } = style;
 
     public IAnimation<T>? Animation
     {
@@ -82,7 +78,7 @@ public sealed class StylingSetterPropertyImpl<T> : IAbstractAnimatableProperty<T
         set => Setter.Animation = value;
     }
 
-    public IObservable<IAnimation<T>?> ObserveAnimation { get; }
+    public IObservable<IAnimation<T>?> ObserveAnimation { get; } = new AnimationObservable(setter);
 
     public Type PropertyType => Property.PropertyType;
 
@@ -130,96 +126,105 @@ internal static class StylingOperatorPropertyDefinition
 {
     internal record struct Definition(PropertyInfo Property, Func<object, ISetter> Getter, Action<object, ISetter> Setter);
 
-    private static readonly Dictionary<Type, Definition[]> s_defines = new();
+    private static readonly Dictionary<Type, Definition[]> s_defines = [];
 
     public static ISetter[] GetSetters(object obj)
     {
-        Type type = obj.GetType();
-        if (!s_defines.TryGetValue(type, out Definition[]? def))
+        lock (s_defines)
         {
-            def = CreateDefinitions(type);
-        }
+            Type type = obj.GetType();
+            if (!s_defines.TryGetValue(type, out Definition[]? def))
+            {
+                def = CreateDefinitions(type);
+            }
 
-        var array = new ISetter[def.Length];
-        for (int i = 0; i < def.Length; i++)
-        {
-            array[i] = def[i].Getter(obj);
-        }
+            var array = new ISetter[def.Length];
+            for (int i = 0; i < def.Length; i++)
+            {
+                array[i] = def[i].Getter(obj);
+            }
 
-        return array;
+            return array;
+        }
     }
 
     public static Definition[] GetDefintions(Type type)
     {
-        if (!s_defines.TryGetValue(type, out Definition[]? def))
+        lock (s_defines)
         {
-            def = CreateDefinitions(type);
-        }
+            if (!s_defines.TryGetValue(type, out Definition[]? def))
+            {
+                def = CreateDefinitions(type);
+            }
 
-        return def;
+            return def;
+        }
     }
 
     private static Definition[] CreateDefinitions(Type type)
     {
-        PropertyInfo[] props = type.GetProperties(BindingFlags.Public | BindingFlags.GetProperty | BindingFlags.Instance);
-        var list = new List<(Definition, DisplayAttribute?)>();
-
-        foreach (PropertyInfo item in props)
+        lock (s_defines)
         {
-            if (item.PropertyType.IsAssignableTo(typeof(ISetter))
-                && item.CanWrite
-                && item.CanRead)
+            PropertyInfo[] props = type.GetProperties(BindingFlags.Public | BindingFlags.GetProperty | BindingFlags.Instance);
+            var list = new List<(Definition, DisplayAttribute?)>();
+
+            foreach (PropertyInfo item in props)
             {
-                DisplayAttribute? att = item.GetCustomAttribute<DisplayAttribute>();
-                ParameterExpression target = Expression.Parameter(typeof(object), "target");
-                ParameterExpression value = Expression.Parameter(typeof(ISetter), "value");
+                if (item.PropertyType.IsAssignableTo(typeof(ISetter))
+                    && item.CanWrite
+                    && item.CanRead)
+                {
+                    DisplayAttribute? att = item.GetCustomAttribute<DisplayAttribute>();
+                    ParameterExpression target = Expression.Parameter(typeof(object), "target");
+                    ParameterExpression value = Expression.Parameter(typeof(ISetter), "value");
 
-                // (object target) => (target as Type).Property;
-                var getExpr = Expression.Lambda<Func<object, ISetter>>(
-                    Expression.Property(Expression.TypeAs(target, type), item),
-                    target);
-                // (object target, ISetter value) => (target as Type).Property = value;
-                var setExpr = Expression.Lambda<Action<object, ISetter>>(
-                    Expression.Assign(Expression.Property(Expression.TypeAs(target, type), item), Expression.TypeAs(value, item.PropertyType)),
-                    target, value);
+                    // (object target) => (target as Type).Property;
+                    var getExpr = Expression.Lambda<Func<object, ISetter>>(
+                        Expression.Property(Expression.TypeAs(target, type), item),
+                        target);
+                    // (object target, ISetter value) => (target as Type).Property = value;
+                    var setExpr = Expression.Lambda<Action<object, ISetter>>(
+                        Expression.Assign(Expression.Property(Expression.TypeAs(target, type), item), Expression.TypeAs(value, item.PropertyType)),
+                        target, value);
 
-                list.Add((new Definition(item, getExpr.Compile(), setExpr.Compile()), att));
+                    list.Add((new Definition(item, getExpr.Compile(), setExpr.Compile()), att));
+                }
             }
+
+            list.Sort((x, y) =>
+            {
+                int? xOrder = x.Item2?.GetOrder();
+                int? yOrder = y.Item2?.GetOrder();
+                if (xOrder == yOrder)
+                {
+                    return 0;
+                }
+
+                if (!xOrder.HasValue)
+                {
+                    return 1;
+                }
+                else if (!yOrder.HasValue)
+                {
+                    return -1;
+                }
+                else
+                {
+                    return xOrder.Value - yOrder.Value;
+                }
+            });
+
+            Definition[] array = list.Select(x => x.Item1).ToArray();
+            s_defines[type] = array;
+            return array;
         }
-
-        list.Sort((x, y) =>
-        {
-            int? xOrder = x.Item2?.GetOrder();
-            int? yOrder = y.Item2?.GetOrder();
-            if (xOrder == yOrder)
-            {
-                return 0;
-            }
-
-            if (!xOrder.HasValue)
-            {
-                return 1;
-            }
-            else if (!yOrder.HasValue)
-            {
-                return -1;
-            }
-            else
-            {
-                return xOrder.Value - yOrder.Value;
-            }
-        });
-
-        Definition[] array = list.Select(x => x.Item1).ToArray();
-        s_defines[type] = array;
-        return array;
     }
 }
 
 public abstract class StylingOperator : SourceOperator
 {
-    private bool _isSettersChanging;
     private Style _style;
+    private EvaluationTarget _preferredEvalTarget;
 
     protected StylingOperator()
     {
@@ -235,18 +240,27 @@ public abstract class StylingOperator : SourceOperator
         {
             if (!ReferenceEquals(value, _style))
             {
-                Properties.CollectionChanged -= Properties_CollectionChanged;
                 if (_style != null)
                 {
                     _style.Invalidated -= OnInvalidated;
                     _style.Setters.CollectionChanged -= Setters_CollectionChanged;
                     Properties.Clear();
+                    _preferredEvalTarget = default;
                 }
 
                 _style = value;
 
                 if (value != null)
                 {
+                    if (value.TargetType.IsAssignableTo(typeof(Drawable)))
+                    {
+                        _preferredEvalTarget = EvaluationTarget.Graphics;
+                    }
+                    else if (value.TargetType.IsAssignableTo(typeof(Sound)))
+                    {
+                        _preferredEvalTarget = EvaluationTarget.Audio;
+                    }
+
                     value.Invalidated += OnInvalidated;
                     value.Setters.CollectionChanged += Setters_CollectionChanged;
                     Type propType = typeof(StylingSetterPropertyImpl<>);
@@ -257,12 +271,11 @@ public abstract class StylingOperator : SourceOperator
                             return (IAbstractProperty)Activator.CreateInstance(type, x, _style)!;
                         }));
                 }
-
-                Properties.CollectionChanged += Properties_CollectionChanged;
-                //Instance = null;
             }
         }
     }
+
+    public override EvaluationTarget GetEvaluationTarget() => _preferredEvalTarget;
 
     protected abstract Style OnInitializeStyle(Func<IList<ISetter>> setters);
 
@@ -271,6 +284,7 @@ public abstract class StylingOperator : SourceOperator
         RaiseInvalidated(new RenderInvalidatedEventArgs(this, nameof(Style)));
     }
 
+    [ObsoleteSerializationApi]
     public override void ReadFromJson(JsonObject json)
     {
         base.ReadFromJson(json);
@@ -281,11 +295,6 @@ public abstract class StylingOperator : SourceOperator
             string name = item.Property.Name;
             if (json.TryGetPropertyValue(name, out JsonNode? propNode))
             {
-                if (propNode == null)
-                {
-
-                }
-
                 ISetter knownSetter = item.Getter.Invoke(this);
 
                 if (propNode.ToSetter(knownSetter.Property.Name, _style.TargetType) is ISetter setter)
@@ -299,6 +308,7 @@ public abstract class StylingOperator : SourceOperator
         RaiseInvalidated(new RenderInvalidatedEventArgs(this));
     }
 
+    [ObsoleteSerializationApi]
     public override void WriteToJson(JsonObject json)
     {
         base.WriteToJson(json);
@@ -311,13 +321,40 @@ public abstract class StylingOperator : SourceOperator
         }
     }
 
-    private void Properties_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    public override void Serialize(ICoreSerializationContext context)
     {
-        if (!_isSettersChanging)
+        base.Serialize(context);
+        Definition[] defs = GetDefintions(GetType());
+        foreach (Definition item in defs.AsSpan())
         {
-            throw new InvalidOperationException(
-                "If you inherit from 'StylingOperator', you cannot change 'Properties' directly; you must do so from 'Style.Setters'.");
+            string name = item.Property.Name;
+            ISetter setter = item.Getter.Invoke(this);
+            context.SetValue(name, setter.ToJson(_style.TargetType, context).Item2);
         }
+    }
+
+    public override void Deserialize(ICoreSerializationContext context)
+    {
+        base.Deserialize(context);
+
+        Definition[] defs = GetDefintions(GetType());
+        foreach (Definition item in defs.AsSpan())
+        {
+            string name = item.Property.Name;
+            if (context.Contains(name))
+            {
+                JsonNode? propNode = context.GetValue<JsonNode?>(name);
+                ISetter knownSetter = item.Getter.Invoke(this);
+
+                if (propNode.ToSetter(knownSetter.Property.Name, _style.TargetType, context) is ISetter setter)
+                {
+                    item.Setter.Invoke(this, setter);
+                }
+            }
+        }
+
+        Style = OnInitializeStyle(() => GetSetters(this));
+        RaiseInvalidated(new RenderInvalidatedEventArgs(this));
     }
 
     private void Setters_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -339,49 +376,41 @@ public abstract class StylingOperator : SourceOperator
             Properties.RemoveRange(index, list.Count);
         }
 
-        try
+        switch (e.Action)
         {
-            _isSettersChanging = true;
-            switch (e.Action)
-            {
-                case NotifyCollectionChangedAction.Add:
-                    Add(e.NewStartingIndex, e.NewItems!);
-                    break;
+            case NotifyCollectionChangedAction.Add:
+                Add(e.NewStartingIndex, e.NewItems!);
+                break;
 
-                case NotifyCollectionChangedAction.Remove:
-                    Remove(e.OldStartingIndex, e.OldItems!);
-                    break;
+            case NotifyCollectionChangedAction.Remove:
+                Remove(e.OldStartingIndex, e.OldItems!);
+                break;
 
-                case NotifyCollectionChangedAction.Replace:
-                    Remove(e.OldStartingIndex, e.OldItems!);
-                    int newIndex = e.NewStartingIndex;
-                    if (newIndex > e.OldStartingIndex)
-                    {
-                        newIndex -= e.OldItems!.Count;
-                    }
-                    Add(newIndex, e.NewItems!);
-                    break;
+            case NotifyCollectionChangedAction.Replace:
+                Remove(e.OldStartingIndex, e.OldItems!);
+                int newIndex = e.NewStartingIndex;
+                if (newIndex > e.OldStartingIndex)
+                {
+                    newIndex -= e.OldItems!.Count;
+                }
+                Add(newIndex, e.NewItems!);
+                break;
 
-                case NotifyCollectionChangedAction.Move:
-                    Properties.MoveRange(e.OldStartingIndex, e.NewItems!.Count, e.NewStartingIndex);
-                    break;
+            case NotifyCollectionChangedAction.Move:
+                Properties.MoveRange(e.OldStartingIndex, e.NewItems!.Count, e.NewStartingIndex);
+                break;
 
-                case NotifyCollectionChangedAction.Reset:
-                    Properties.Clear();
-                    break;
+            case NotifyCollectionChangedAction.Reset:
+                Properties.Clear();
+                break;
 
-                default:
-                    break;
-            }
-
-            if (sender is ICollection collection)
-            {
-                RaiseInvalidated(new RenderInvalidatedEventArgs(collection));
-            }
+            default:
+                break;
         }
-        finally
+
+        if (sender is ICollection collection)
         {
-            _isSettersChanging = false;
+            RaiseInvalidated(new RenderInvalidatedEventArgs(collection));
         }
     }
 }

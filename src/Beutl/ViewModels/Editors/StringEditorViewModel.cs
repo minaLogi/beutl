@@ -3,17 +3,11 @@
 using Avalonia;
 
 using Beutl.Controls.PropertyEditors;
-using Beutl.Extensibility;
 
 namespace Beutl.ViewModels.Editors;
 
-public sealed class StringEditorViewModel : ValueEditorViewModel<string>
+public sealed class StringEditorViewModel(IAbstractProperty<string?> property) : ValueEditorViewModel<string?>(property)
 {
-    public StringEditorViewModel(IAbstractProperty<string> property)
-        : base(property)
-    {
-    }
-
     public override void Accept(IPropertyEditorContextVisitor visitor)
     {
         base.Accept(visitor);
@@ -28,21 +22,21 @@ public sealed class StringEditorViewModel : ValueEditorViewModel<string>
             }
 
             editor[!StringEditor.TextProperty] = Value.ToBinding();
-            editor.ValueChanging += OnValueChanging;
             editor.ValueChanged += OnValueChanged;
+            editor.ValueConfirmed += OnValueConfirmed;
             editor.Classes.Set("multiline", multiline);
         }
     }
 
-    private void OnValueChanged(object? sender, PropertyEditorValueChangedEventArgs e)
+    private void OnValueConfirmed(object? sender, PropertyEditorValueChangedEventArgs e)
     {
-        if (e is PropertyEditorValueChangedEventArgs<string> args)
+        if (e is PropertyEditorValueChangedEventArgs<string?> args)
         {
             SetValue(args.OldValue, args.NewValue);
         }
     }
 
-    private void OnValueChanging(object? sender, PropertyEditorValueChangedEventArgs e)
+    private void OnValueChanged(object? sender, PropertyEditorValueChangedEventArgs e)
     {
         if (sender is StringEditor editor)
         {

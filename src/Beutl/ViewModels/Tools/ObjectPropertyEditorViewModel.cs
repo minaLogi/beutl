@@ -1,6 +1,5 @@
 ﻿using System.Text.Json.Nodes;
 
-using Beutl.Extensibility;
 using Beutl.Services.PrimitiveImpls;
 using Beutl.ViewModels.Editors;
 
@@ -10,7 +9,7 @@ namespace Beutl.ViewModels.Tools;
 
 public sealed class ObjectPropertyEditorViewModel : IToolContext
 {
-    private readonly CompositeDisposable _disposables = new();
+    private readonly CompositeDisposable _disposables = [];
     private readonly EditViewModel _viewModel;
     // インデックスが大きい方が新しい
     private readonly List<PropertiesEditorViewModel> _cache = new(8);

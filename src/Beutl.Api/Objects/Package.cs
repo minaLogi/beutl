@@ -1,4 +1,7 @@
-﻿using System.Reactive.Linq;
+﻿using System.Diagnostics;
+using System.Reactive.Linq;
+
+using Nito.AsyncEx;
 
 using Reactive.Bindings;
 
@@ -57,14 +60,20 @@ public class Package
 
     public IReadOnlyReactiveProperty<bool> IsDeleted => _isDeleted;
 
+    public MyAsyncLock Lock => _clients.Lock;
+
     public async Task RefreshAsync()
     {
+        using Activity? activity = _clients.ActivitySource.StartActivity("Package.Refresh", ActivityKind.Client);
+
         _response.Value = await _clients.Packages.GetPackageAsync(Name);
         _isDeleted.Value = false;
     }
 
     public async Task UpdateAsync(UpdatePackageRequest request)
     {
+        using Activity? activity = _clients.ActivitySource.StartActivity("Package.Update", ActivityKind.Client);
+
         if (_isDeleted.Value)
         {
             throw new InvalidOperationException("This object has been deleted.");
@@ -83,6 +92,8 @@ public class Package
         ICollection<string>? tags = null,
         string? website = null)
     {
+        using Activity? activity = _clients.ActivitySource.StartActivity("Package.Update", ActivityKind.Client);
+
         if (_isDeleted.Value)
         {
             throw new InvalidOperationException("This object has been deleted.");
@@ -101,6 +112,8 @@ public class Package
 
     public async Task DeleteAsync()
     {
+        using Activity? activity = _clients.ActivitySource.StartActivity("Package.Delete", ActivityKind.Client);
+
         FileResponse response = await _clients.Packages.DeleteAsync(Name);
 
         response.Dispose();
@@ -110,12 +123,17 @@ public class Package
 
     public async Task<Release> GetReleaseAsync(string version)
     {
+        using Activity? activity = _clients.ActivitySource.StartActivity("Package.GetRelease", ActivityKind.Client);
         ReleaseResponse response = await _clients.Releases.GetReleaseAsync(Name, version);
         return new Release(this, response, _clients);
     }
 
     public async Task<Release[]> GetReleasesAsync(int start = 0, int count = 30)
     {
+        using Activity? activity = _clients.ActivitySource.StartActivity("Package.GetReleases", ActivityKind.Client);
+        activity?.SetTag("start", start);
+        activity?.SetTag("count", count);
+
         return (await _clients.Releases.GetReleasesAsync(Name, start, count))
             .Select(x => new Release(this, x, _clients))
             .ToArray();
@@ -123,6 +141,8 @@ public class Package
 
     public async Task<Release> AddReleaseAsync(string version, CreateReleaseRequest request)
     {
+        using Activity? activity = _clients.ActivitySource.StartActivity("Package.AddRelease", ActivityKind.Client);
+
         ReleaseResponse response = await _clients.Releases.PostAsync(Name, version, request);
         return new Release(this, response, _clients);
     }

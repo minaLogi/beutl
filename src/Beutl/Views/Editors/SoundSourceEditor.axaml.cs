@@ -1,9 +1,10 @@
 ﻿using Avalonia.Controls;
 using Avalonia.Platform.Storage;
 
-using Beutl.Api.Services;
 using Beutl.Media.Decoding;
 using Beutl.Media.Source;
+using Beutl.ProjectSystem;
+using Beutl.ViewModels;
 using Beutl.ViewModels.Editors;
 
 using FluentAvalonia.UI.Controls;
@@ -51,9 +52,9 @@ public partial class SoundSourceEditor : UserControl
         {
             var contentDialog = new ContentDialog()
             {
-                Title = "対応している拡張子が見つかりませんでした",
+                Title = Message.No_supported_extensions_were_found,
                 CloseButtonText = Strings.Close,
-                PrimaryButtonText = "ドキュメントを表示"
+                PrimaryButtonText = Strings.OpenDocument
             };
 
             if (await contentDialog.ShowAsync() == ContentDialogResult.Primary)
@@ -81,11 +82,18 @@ public partial class SoundSourceEditor : UserControl
             IReadOnlyList<IStorageFile> result = await topLevel.StorageProvider.OpenFilePickerAsync(options);
             if (result.Count > 0
                 && result[0].TryGetLocalPath() is string localPath
-                && MediaSourceManager.Shared.OpenSoundSource(localPath, out ISoundSource? soundSource))
+                && SoundSource.TryOpen(localPath, out SoundSource? soundSource))
             {
                 ISoundSource? oldValue = vm.WrappedProperty.GetValue();
-                vm.SetValue(oldValue, soundSource);
-                oldValue?.Dispose();
+                vm.SetValueAndDispose(oldValue, soundSource);
+
+                if (vm.GetService<Element>() is Element element)
+                {
+                    TimelineViewModel? timeline = vm.GetService<EditViewModel>()?.FindToolTab<TimelineViewModel>();
+                    ElementViewModel? elmViewModel = timeline?.GetViewModelFor(element);
+
+                    elmViewModel?.ChangeToOriginalLength?.Execute();
+                }
             }
         }
     }

@@ -1,4 +1,4 @@
-﻿using System.Reflection;
+﻿using System.Reactive.Concurrency;
 
 using Avalonia;
 using Avalonia.Controls;
@@ -14,6 +14,7 @@ using Beutl.Configuration;
 using Beutl.NodeTree.Nodes;
 using Beutl.Operators;
 using Beutl.Services;
+using Beutl.Services.StartupTasks;
 using Beutl.ViewModels;
 using Beutl.Views;
 
@@ -26,27 +27,30 @@ namespace Beutl;
 
 public sealed class App : Application
 {
+    private readonly TaskCompletionSource _windowOpenTcs = new();
     private FluentAvaloniaTheme? _theme;
     private MainViewModel? _mainViewModel;
+    private Startup? _startUp;
 
     public override void Initialize()
     {
+        _startUp = GetMainViewModel().RunStartupTask();
+        _startUp.WaitAll().ContinueWith(_ => _startUp = null);
+
+        using Activity? activity = Telemetry.StartActivity("App.Initialize");
+
         FAUISettings.SetAnimationsEnabledAtAppLevel(true);
 
-        //PaletteColors
-        Type colorsType = typeof(Colors);
-        PropertyInfo[] colorProperties = colorsType.GetProperties(BindingFlags.Public | BindingFlags.GetProperty | BindingFlags.Static);
-        Color[] colors = colorProperties.Select(p => p.GetValue(null)).OfType<Color>().ToArray();
-
         GlobalConfiguration config = GlobalConfiguration.Instance;
-        config.Restore(GlobalConfiguration.DefaultFilePath);
         ViewConfig view = config.ViewConfig;
         CultureInfo.CurrentUICulture = view.UICulture;
 
         AvaloniaXamlLoader.Load(this);
-        Resources["PaletteColors"] = colors;
+        Resources["PaletteColors"] = AppHelpers.GetPaletteColors();
 
         _theme = (FluentAvaloniaTheme)Styles[0];
+
+        activity?.AddEvent(new ActivityEvent("Xaml_Loaded"));
 
         view.GetObservable(ViewConfig.ThemeProperty).Subscribe(v =>
         {
@@ -69,21 +73,32 @@ public sealed class App : Application
                 }
             }, DispatcherPriority.Send);
         });
+
+        if (view.UseCustomAccentColor && Color.TryParse(view.CustomAccentColor, out Color customColor))
+        {
+            activity?.SetTag("CustomAccentColor", customColor.ToString());
+
+            _theme.CustomAccentColor = customColor;
+        }
     }
 
     public override void RegisterServices()
     {
-        base.RegisterServices();
-        PropertyEditorExtension.DefaultHandler = new PropertyEditorService.PropertyEditorExtensionImpl();
+        using Activity? activity = Telemetry.StartActivity("App.RegisterServices");
 
+        base.RegisterServices();
+
+        PropertyEditorExtension.DefaultHandler = new PropertyEditorService.PropertyEditorExtensionImpl();
         ProjectItemContainer.Current.Generator = new ProjectItemGenerator();
         NotificationService.Handler = new NotificationServiceHandler();
 
-        GetMainViewModel().RegisterServices();
+        // 以下三つの処理は意外と重い
+        Parallel.Invoke(
+            () => GetMainViewModel().RegisterServices(),
+            LibraryRegistrar.RegisterAll,
+            NodesRegistrar.RegisterAll);
 
-        LibraryRegistrar.RegisterAll();
-        NodesRegistrar.RegisterAll();
-        ReactivePropertyScheduler.SetDefault(AvaloniaScheduler.Instance);
+        ReactivePropertyScheduler.SetDefault(ImmediateScheduler.Instance);
     }
 
     public override void OnFrameworkInitializationCompleted()
@@ -94,6 +109,8 @@ public sealed class App : Application
             {
                 DataContext = GetMainViewModel(),
             };
+
+            desktop.MainWindow.Opened += (_, _) => _windowOpenTcs.SetResult();
         }
         else if (ApplicationLifetime is ISingleViewApplicationLifetime singleViewPlatform)
         {
@@ -108,14 +125,45 @@ public sealed class App : Application
 
     public static IClipboard? GetClipboard()
     {
-        switch (Current?.ApplicationLifetime)
+        return GetTopLevel()?.Clipboard;
+    }
+
+    public static TopLevel? GetTopLevel()
+    {
+        return (Current?.ApplicationLifetime) switch
         {
-            case IClassicDesktopStyleApplicationLifetime desktop:
-                return desktop.MainWindow?.Clipboard;
-            case ISingleViewApplicationLifetime { MainView: { } mainview }:
-                return TopLevel.GetTopLevel(mainview)?.Clipboard;
-            default:
-                return null;
+            IClassicDesktopStyleApplicationLifetime desktop => desktop.MainWindow,
+            ISingleViewApplicationLifetime { MainView: { } mainview } => TopLevel.GetTopLevel(mainview),
+            _ => null,
+        };
+    }
+
+    public static FluentAvaloniaTheme? GetFATheme()
+    {
+        return (Current as App)?._theme;
+    }
+
+    public static async ValueTask WaitStartupTask()
+    {
+        if (Current is App { _startUp: { } obj })
+        {
+            await obj.WaitAll();
+        }
+    }
+
+    public static async ValueTask WaitLoadingExtensions()
+    {
+        if (Current is App { _startUp: { } obj })
+        {
+            await obj.WaitLoadingExtensions();
+        }
+    }
+
+    public static async ValueTask WaitWindowOpened()
+    {
+        if (Current is App app)
+        {
+            await app._windowOpenTcs.Task.ConfigureAwait(false);
         }
     }
 

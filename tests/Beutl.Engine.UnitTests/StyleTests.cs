@@ -6,6 +6,7 @@ using Beutl.Styling;
 using Microsoft.Extensions.Logging;
 
 using NUnit.Framework;
+using NUnit.Framework.Legacy;
 
 namespace Beutl.Graphics.UnitTests;
 
@@ -49,12 +50,7 @@ public class StyleTests
             }
         };
 
-        _styles1 = new Style[]
-        {
-            style1,
-            style2,
-            style3
-        };
+        _styles1 = [style1, style2, style3];
 
         _obj2 = new RectShape
         {
@@ -83,11 +79,7 @@ public class StyleTests
             }
         };
 
-        _styles2 = new Style[]
-        {
-            style1,
-            style2,
-        };
+        _styles2 = [style1, style2];
     }
 
     [Test]
@@ -99,9 +91,9 @@ public class StyleTests
         (_obj as IStyleable).StyleApplied(instance);
         instance.Apply(new Clock());
 
-        Assert.AreEqual("third2", _obj.String1);
-        Assert.AreEqual("second1", _obj.String2);
-        Assert.AreEqual("third1", _obj.String3);
+        ClassicAssert.AreEqual("third2", _obj.String1);
+        ClassicAssert.AreEqual("second1", _obj.String2);
+        ClassicAssert.AreEqual("third1", _obj.String3);
     }
 
     [Test]
@@ -115,7 +107,7 @@ public class StyleTests
             // White -> Red -> White
             if (e.Sender == _obj2.Fill && ++count1 > 2)
             {
-                Assert.Fail();
+                ClassicAssert.Fail();
             }
         }))
         using (Brush.OpacityProperty.Changed.Subscribe(e =>
@@ -123,7 +115,7 @@ public class StyleTests
             // 1.0 -> 0.5 -> 1.0
             if (e.Sender == _obj2.Fill && ++count2 > 2)
             {
-                Assert.Fail();
+                ClassicAssert.Fail();
             }
         }))
         using (Drawable.FillProperty.Changed.Subscribe(e =>
@@ -131,7 +123,7 @@ public class StyleTests
             // ImmutableSolidColorBrush(White) -> SolidColorBrush(Transparent)
             if (e.Sender == _obj2 && ++count3 > 1)
             {
-                Assert.Fail();
+                ClassicAssert.Fail();
             }
         }))
         {
@@ -143,8 +135,8 @@ public class StyleTests
             instance.Apply(new Clock());
             instance.End();
 
-            Assert.AreEqual(Colors.White, ((ISolidColorBrush)_obj2.Fill).Color);
-            Assert.AreEqual(100, _obj2.Fill.Opacity);
+            ClassicAssert.AreEqual(Colors.White, ((ISolidColorBrush)_obj2.Fill).Color);
+            ClassicAssert.AreEqual(100, _obj2.Fill.Opacity);
         }
     }
 

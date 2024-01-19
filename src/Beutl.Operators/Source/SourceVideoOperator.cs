@@ -49,9 +49,40 @@ public sealed class SourceVideoOperator : DrawablePublishOperator<SourceVideo>
         base.OnAttachedToHierarchy(args);
         if (Source is { Value: null } setter
             && _sourceName != null
-            && MediaSourceManager.Shared.OpenVideoSource(_sourceName, out IVideoSource? videoSource))
+            && VideoSource.TryOpen(_sourceName, out VideoSource? videoSource))
         {
             setter.Value = videoSource;
+        }
+    }
+
+    public override bool HasOriginalLength()
+    {
+        return Source.Value?.IsDisposed == false;
+    }
+
+    public override bool TryGetOriginalLength(out TimeSpan timeSpan)
+    {
+        if (Source.Value?.IsDisposed == false)
+        {
+            timeSpan = Source.Value.Duration - OffsetPosition.Value;
+            return true;
+        }
+        else
+        {
+            timeSpan = TimeSpan.Zero;
+            return false;
+        }
+    }
+
+    public override IRecordableCommand? OnSplit(bool backward, TimeSpan startDelta, TimeSpan lengthDelta)
+    {
+        if (backward)
+        {
+            return new ChangeSetterValueCommand<TimeSpan>(OffsetPosition, OffsetPosition.Value, OffsetPosition.Value + startDelta);
+        }
+        else
+        {
+            return base.OnSplit(backward, startDelta, lengthDelta);
         }
     }
 }

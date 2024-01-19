@@ -895,4 +895,124 @@ b-editorがダウンロードURLを管理します。</value>
   <data name="UseNode" xml:space="preserve">
     <value>ノードを使う</value>
   </data>
+  <data name="Unsupported" xml:space="preserve">
+    <value>非対応</value>
+  </data>
+  <data name="EnableRenderingCache" xml:space="preserve">
+    <value>描画キャッシュを有効化</value>
+  </data>
+  <data name="TimelineZoom" xml:space="preserve">
+    <value>拡大率</value>
+  </data>
+  <data name="UseGlobalClock" xml:space="preserve">
+    <value>グローバル時計を使う</value>
+  </data>
+  <data name="EditJson" xml:space="preserve">
+    <value>Jsonを編集</value>
+  </data>
+  <data name="AddNode" xml:space="preserve">
+    <value>ノードを追加</value>
+  </data>
+  <data name="Brush_ConicalGradient" xml:space="preserve">
+    <value>円錐型グラデーション</value>
+  </data>
+  <data name="Brush_LinearGradient" xml:space="preserve">
+    <value>線形グラデーション</value>
+  </data>
+  <data name="Brush_RadialGradient" xml:space="preserve">
+    <value>放射状グラデーション</value>
+  </data>
+  <data name="Brush_Solid" xml:space="preserve">
+    <value>塗りつぶし</value>
+  </data>
+  <data name="Change" xml:space="preserve">
+    <value>変更</value>
+  </data>
+  <data name="Disconnect" xml:space="preserve">
+    <value>切断</value>
+  </data>
+  <data name="Initialize" xml:space="preserve">
+    <value>初期化</value>
+  </data>
+  <data name="OpenDocument" xml:space="preserve">
+    <value>ドキュメントを開く</value>
+  </data>
+  <data name="ResetZoom" xml:space="preserve">
+    <value>拡大率をリセット</value>
+  </data>
+  <data name="RemoveAnimation" xml:space="preserve">
+    <value>アニメーションを削除</value>
+  </data>
+  <data name="ColorPallete" xml:space="preserve">
+    <value>カラーパレット</value>
+  </data>
+  <data name="ChangeToOriginalLength" xml:space="preserve">
+    <value>オリジナルの長さに変更</value>
+  </data>
+  <data name="SplitByCurrentFrame" xml:space="preserve">
+    <value>現在のフレームで分割</value>
+  </data>
+  <data name="Agree" xml:space="preserve">
+    <value>同意</value>
+  </data>
+  <data name="Disagree" xml:space="preserve">
+    <value>同意しない</value>
+  </data>
+  <data name="ShowDetails" xml:space="preserve">
+    <value>詳細を表示</value>
+  </data>
+  <data name="SaveSelectedElementAsImage" xml:space="preserve">
+    <value>選択された要素を画像として保存</value>
+  </data>
+  <data name="SaveFrameAsImage" xml:space="preserve">
+    <value>フレームを画像として保存</value>
+  </data>
+  <data name="Move" xml:space="preserve">
+    <value>移動</value>
+  </data>
+  <data name="Hand" xml:space="preserve">
+    <value>ハンド</value>
+  </data>
+  <data name="AdjustDurationToCurrent" xml:space="preserve">
+    <value>現在の位置に時間を調整</value>
+  </data>
+  <data name="AdjustDurationToPointer" xml:space="preserve">
+    <value>ポインターの位置に時間を調整</value>
+  </data>
+  <data name="Editor" xml:space="preserve">
+    <value>エディター</value>
+  </data>
+  <data name="RunningStartupTasks" xml:space="preserve">
+    <value>スタートアップタスクを実行中</value>
+  </data>
+  <data name="Brush_PerlinNoise" xml:space="preserve">
+    <value>パーリンノイズ</value>
+  </data>
+  <data name="FlatShadow" xml:space="preserve">
+    <value>フラットシャドウ</value>
+  </data>
+  <data name="StrokeEffect" xml:space="preserve">
+    <value>ストローク</value>
+  </data>
+  <data name="BlendEffect" xml:space="preserve">
+    <value>ブレンド</value>
+  </data>
+  <data name="Negaposi" xml:space="preserve">
+    <value>ネガポジ</value>
+  </data>
+  <data name="ChromaKey" xml:space="preserve">
+    <value>クロマキー</value>
+  </data>
+  <data name="ColorKey" xml:space="preserve">
+    <value>カラーキー</value>
+  </data>
+  <data name="SaveAsImage" xml:space="preserve">
+    <value>画像として保存</value>
+  </data>
+  <data name="CopyAsImage" xml:space="preserve">
+    <value>画像としてコピー</value>
+  </data>
+  <data name="AlwaysDisplay" xml:space="preserve">
+    <value>常に表示する</value>
+  </data>
 </root>

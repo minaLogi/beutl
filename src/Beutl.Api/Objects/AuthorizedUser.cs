@@ -1,26 +1,19 @@
 ﻿using System.Diagnostics;
 using System.Net.Http.Headers;
 
-using Nito.AsyncEx;
+using Beutl.Api.Services;
 
 namespace Beutl.Api.Objects;
 
-public class AuthorizedUser
+public class AuthorizedUser(
+    Profile profile, AuthResponse response,
+    BeutlApiApplication clients, HttpClient httpClient, DateTime writeTime)
 {
-    private readonly AsyncLock _mutex = new();
-    private readonly BeutlApiApplication _clients;
-    private readonly HttpClient _httpClient;
-    private AuthResponse _response;
+    private AuthResponse _response = response;
+    // user.jsonに書き込まれた時間
+    internal DateTime _writeTime = writeTime;
 
-    public AuthorizedUser(Profile profile, AuthResponse response, BeutlApiApplication clients, HttpClient httpClient)
-    {
-        Profile = profile;
-        _response = response;
-        _clients = clients;
-        _httpClient = httpClient;
-    }
-
-    public Profile Profile { get; }
+    public Profile Profile { get; } = profile;
 
     public string Token => _response.Token;
 
@@ -30,26 +23,61 @@ public class AuthorizedUser
 
     public bool IsExpired => Expiration < DateTimeOffset.UtcNow;
 
+    public MyAsyncLock Lock => clients.Lock;
+
     public async ValueTask RefreshAsync(bool force = false)
     {
-        using (await _mutex.LockAsync())
-        {
-            if (force || IsExpired)
-            {
-                _response = await _clients.Account.RefreshAsync(new RefeshTokenRequest(RefreshToken, Token))
-                    .ConfigureAwait(false);
-                _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Token);
+        using Activity? activity = clients.ActivitySource.StartActivity("AuthorizedUser.Refresh", ActivityKind.Client);
 
-                if (_clients.AuthorizedUser.Value == this)
+        string fileName = Path.Combine(Helper.AppRoot, "user.json");
+        if (File.Exists(fileName))
+        {
+            DateTime lastWriteTime = File.GetLastWriteTimeUtc(fileName);
+            if (_writeTime < lastWriteTime)
+            {
+                AuthorizedUser? fileUser = await clients.ReadUserAsync();
+                if (fileUser?.Profile?.Id == Profile.Id)
                 {
-                    _clients.SaveUser();
+                    _response = fileUser._response;
+                    _writeTime = lastWriteTime;
                 }
+                else if (fileUser != null)
+                {
+                    clients.SignOut(false);
+                    throw new BeutlApiException<ApiErrorResponse>(
+                        message: "The user may have been changed in another process.",
+                        statusCode: 401,
+                        response: "",
+                        headers: new Dictionary<string, IEnumerable<string>>(),
+                        result: new ApiErrorResponse(
+                            documentation_url: "",
+                            error_code: ApiErrorCode.Unknown,
+                            message: "The user may have been changed in another process."),
+                        innerException: null);
+                }
+            }
+        }
+
+        activity?.SetTag("force", force);
+        activity?.SetTag("is_expired", IsExpired);
+
+        if (force || IsExpired)
+        {
+            _response = await clients.Account.RefreshAsync(new RefeshTokenRequest(RefreshToken, Token))
+                .ConfigureAwait(false);
+            activity?.AddEvent(new("Refreshed"));
+            httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Token);
+
+            if (clients.AuthorizedUser.Value == this)
+            {
+                clients.SaveUser();
+                activity?.AddEvent(new("Saved"));
             }
         }
     }
 
     public async Task<StorageUsageResponse> StorageUsageAsync()
     {
-        return await _clients.Account.StorageUsageAsync();
+        return await clients.Account.StorageUsageAsync();
     }
 }

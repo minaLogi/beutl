@@ -1,4 +1,7 @@
-﻿using System.Text.Json.Nodes;
+﻿using System.Diagnostics.CodeAnalysis;
+using System.Text.Json.Nodes;
+
+using Beutl.Serialization;
 
 namespace Beutl.Configuration;
 
@@ -6,13 +9,12 @@ public sealed class GlobalConfiguration
 {
     public static readonly GlobalConfiguration Instance = new();
     private string? _filePath;
-    private JsonObject _json = new();
 
     public static string DefaultFilePath
     {
         get
         {
-            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".beutl", "settings.json");
+            return Path.Combine(BeutlEnvironment.GetHomeDirectoryPath(), "settings.json");
         }
     }
 
@@ -32,11 +34,27 @@ public sealed class GlobalConfiguration
     public ExtensionConfig ExtensionConfig { get; } = new();
 
     public BackupConfig BackupConfig { get; } = new();
+    
+    public TelemetryConfig TelemetryConfig { get; } = new();
+    
+    public EditorConfig EditorConfig { get; } = new();
+
+    [AllowNull]
+    public string LastStartedVersion { get; private set; } = GitVersionInformation.SemVer;
 
     public void Save(string file)
     {
         try
         {
+            static void Serialize(ICoreSerializable serializable, JsonObject obj)
+            {
+                var context = new JsonSerializationContext(serializable.GetType(), NullSerializationErrorNotifier.Instance, json: obj);
+                using (ThreadLocalSerializationContext.Enter(context))
+                {
+                    serializable.Serialize(context);
+                }
+            }
+
             _filePath = file;
             RemoveHandlers();
             string dir = Path.GetDirectoryName(file)!;
@@ -45,23 +63,36 @@ public sealed class GlobalConfiguration
                 Directory.CreateDirectory(dir);
             }
 
+            var json = new JsonObject()
+            {
+                ["Version"] = GitVersionInformation.NuGetVersionV2
+            };
+
             var fontNode = new JsonObject();
-            FontConfig.WriteToJson(fontNode);
-            _json["font"] = fontNode;
+            Serialize(FontConfig, fontNode);
+            json["Font"] = fontNode;
 
             var viewNode = new JsonObject();
-            ViewConfig.WriteToJson(viewNode);
-            _json["view"] = viewNode;
+            Serialize(ViewConfig, viewNode);
+            json["View"] = viewNode;
 
             var extensionNode = new JsonObject();
-            ExtensionConfig.WriteToJson(extensionNode);
-            _json["extension"] = extensionNode;
+            Serialize(ExtensionConfig, extensionNode);
+            json["Extension"] = extensionNode;
 
             var backupNode = new JsonObject();
-            BackupConfig.WriteToJson(backupNode);
-            _json["backup"] = backupNode;
+            Serialize(BackupConfig, backupNode);
+            json["Backup"] = backupNode;
+            
+            var telemetryNode = new JsonObject();
+            Serialize(TelemetryConfig, telemetryNode);
+            json["Telemetry"] = telemetryNode;
+            
+            var editorNode = new JsonObject();
+            Serialize(EditorConfig, editorNode);
+            json["Editor"] = editorNode;
 
-            _json.JsonSave(file);
+            json.JsonSave(file);
         }
         finally
         {
@@ -76,12 +107,55 @@ public sealed class GlobalConfiguration
             RemoveHandlers();
             if (JsonHelper.JsonRestore(file) is JsonObject json)
             {
-                FontConfig.ReadFromJson((JsonObject)json["font"]!);
-                ViewConfig.ReadFromJson((JsonObject)json["view"]!);
-                ExtensionConfig.ReadFromJson((JsonObject)json["extension"]!);
-                BackupConfig.ReadFromJson((JsonObject)json["backup"]!);
+                JsonNode? GetNode(string name1, string name2)
+                {
+                    if (json[name1] is JsonNode node1)
+                        return node1;
+                    else if (json[name2] is JsonNode node2)
+                        return node2;
+                    else
+                        return null;
+                }
+                static void Deserialize(ICoreSerializable serializable, JsonObject obj)
+                {
+                    var context = new JsonSerializationContext(
+                        serializable.GetType(), NullSerializationErrorNotifier.Instance, json: obj);
+                    using (ThreadLocalSerializationContext.Enter(context))
+                    {
+                        serializable.Deserialize(context);
+                    }
+                }
 
-                _json = json;
+                if (GetNode("font", "Font") is JsonObject font)
+                    Deserialize(FontConfig, font);
+
+                if (GetNode("view", "View") is JsonObject view)
+                    Deserialize(ViewConfig, view);
+
+                if (GetNode("extension", "Extension") is JsonObject extension)
+                    Deserialize(ExtensionConfig, extension);
+
+                if (GetNode("backup", "Backup") is JsonObject backup)
+                    Deserialize(BackupConfig, backup);
+                
+                if (GetNode("telemetry", "Telemetry") is JsonObject telemetry)
+                    Deserialize(TelemetryConfig, telemetry);
+                
+                if (json["Editor"] is JsonObject editor)
+                    Deserialize(EditorConfig, editor);
+
+                if (json["Version"] is JsonValue version)
+                {
+                    if (version.TryGetValue(out string? versionString))
+                    {
+                        LastStartedVersion = versionString;
+                    }
+                }
+                else
+                {
+                    // Todo: 互換性維持のコード
+                    LastStartedVersion = "1.0.0-preview.1";
+                }
             }
         }
         finally
@@ -96,6 +170,8 @@ public sealed class GlobalConfiguration
         FontConfig.ConfigurationChanged += OnConfigurationChanged;
         ViewConfig.ConfigurationChanged += OnConfigurationChanged;
         ExtensionConfig.ConfigurationChanged += OnConfigurationChanged;
+        TelemetryConfig.ConfigurationChanged += OnConfigurationChanged;
+        EditorConfig.ConfigurationChanged += OnConfigurationChanged;
     }
 
     private void RemoveHandlers()
@@ -104,6 +180,8 @@ public sealed class GlobalConfiguration
         FontConfig.ConfigurationChanged -= OnConfigurationChanged;
         ViewConfig.ConfigurationChanged -= OnConfigurationChanged;
         ExtensionConfig.ConfigurationChanged -= OnConfigurationChanged;
+        TelemetryConfig.ConfigurationChanged -= OnConfigurationChanged;
+        EditorConfig.ConfigurationChanged -= OnConfigurationChanged;
     }
 
     private void OnConfigurationChanged(object? sender, EventArgs e)

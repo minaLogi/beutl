@@ -10,16 +10,13 @@ using Reactive.Bindings;
 
 namespace Beutl.ViewModels;
 
-public sealed class GraphEditorViewModel<T> : GraphEditorViewModel
+public sealed class GraphEditorViewModel<T>(
+    EditViewModel editViewModel, KeyFrameAnimation<T> animation, Element? element)
+    : GraphEditorViewModel(editViewModel, animation, element)
 {
-    public GraphEditorViewModel(EditViewModel editViewModel, KeyFrameAnimation<T> animation, Element? layer)
-        : base(editViewModel, animation, layer)
-    {
-    }
-
     public override void DropEasing(Easing easing, TimeSpan keyTime)
     {
-        var originalKeyTime = keyTime;
+        TimeSpan originalKeyTime = keyTime;
         keyTime = ConvertKeyTime(keyTime);
         Project? proj = Scene.FindHierarchicalParent<Project>();
         int rate = proj?.GetFrameRate() ?? 30;
@@ -56,20 +53,11 @@ public sealed class GraphEditorViewModel<T> : GraphEditorViewModel
         }
     }
 
-    private sealed class AddKeyFrameCommand : IRecordableCommand
+    private sealed class AddKeyFrameCommand(KeyFrames keyFrames, IKeyFrame keyFrame) : IRecordableCommand
     {
-        private readonly KeyFrames _keyFrames;
-        private readonly IKeyFrame _keyFrame;
-
-        public AddKeyFrameCommand(KeyFrames keyFrames, IKeyFrame keyFrame)
-        {
-            _keyFrames = keyFrames;
-            _keyFrame = keyFrame;
-        }
-
         public void Do()
         {
-            _keyFrames.Add(_keyFrame, out _);
+            keyFrames.Add(keyFrame, out _);
         }
 
         public void Redo()
@@ -79,23 +67,23 @@ public sealed class GraphEditorViewModel<T> : GraphEditorViewModel
 
         public void Undo()
         {
-            _keyFrames.Remove(_keyFrame);
+            keyFrames.Remove(keyFrame);
         }
     }
 }
 
 public abstract class GraphEditorViewModel : IDisposable
 {
-    private readonly CompositeDisposable _disposables = new();
+    private readonly CompositeDisposable _disposables = [];
     private readonly EditViewModel _editViewModel;
     private readonly GraphEditorViewViewModelFactory[] _factories;
-    protected Element? Layer;
+    protected Element? Element;
     private bool _editting;
 
-    protected GraphEditorViewModel(EditViewModel editViewModel, IKeyFrameAnimation animation, Element? layer)
+    protected GraphEditorViewModel(EditViewModel editViewModel, IKeyFrameAnimation animation, Element? element)
     {
         _editViewModel = editViewModel;
-        Layer = layer;
+        Element = element;
         Animation = animation;
 
         UseGlobalClock = ((CoreObject)animation).GetObservable(KeyFrameAnimation.UseGlobalClockProperty)
@@ -103,7 +91,7 @@ public abstract class GraphEditorViewModel : IDisposable
             .DisposeWith(_disposables);
 
         Margin = UseGlobalClock.Select(v => !v
-            ? Layer?.GetObservable(Element.StartProperty)
+            ? Element?.GetObservable(Element.StartProperty)
                 .CombineLatest(Options)
                 .Select(item => new Thickness(item.First.ToPixel(item.Second.Scale), 0, 0, 0))
             : null)
@@ -228,7 +216,7 @@ public abstract class GraphEditorViewModel : IDisposable
 
     public TimeSpan ConvertKeyTime(TimeSpan globalkeyTime)
     {
-        TimeSpan localKeyTime = Layer != null ? globalkeyTime - Layer.Start : globalkeyTime;
+        TimeSpan localKeyTime = Element != null ? globalkeyTime - Element.Start : globalkeyTime;
         TimeSpan keyTime = Animation.UseGlobalClock ? globalkeyTime : localKeyTime;
 
         Project? proj = Scene.FindHierarchicalParent<Project>();
@@ -263,7 +251,7 @@ public abstract class GraphEditorViewModel : IDisposable
             item.Dispose();
         }
 
-        Layer = null;
+        Element = null;
         GC.SuppressFinalize(this);
     }
 }

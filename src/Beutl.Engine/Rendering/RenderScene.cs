@@ -1,17 +1,11 @@
-﻿using Beutl.Animation;
-using Beutl.Graphics;
+﻿using Beutl.Graphics;
 using Beutl.Media;
 
 namespace Beutl.Rendering;
 
-public sealed class RenderScene : IDisposable
+public sealed class RenderScene(PixelSize size) : IDisposable
 {
-    private readonly SortedDictionary<int, RenderLayer> _layer = new();
-
-    public RenderScene(PixelSize size)
-    {
-        Size = size;
-    }
+    private readonly SortedDictionary<int, RenderLayer> _layer = [];
 
     public RenderLayer this[int index]
     {
@@ -27,7 +21,7 @@ public sealed class RenderScene : IDisposable
         }
     }
 
-    public PixelSize Size { get; }
+    public PixelSize Size { get; } = size;
 
     public void Clear()
     {
@@ -59,13 +53,16 @@ public sealed class RenderScene : IDisposable
         }
     }
 
-    public void Render(Audio.Audio audio)
+    public Drawable? HitTest(Point point)
     {
-        audio.Clear();
-
-        foreach (RenderLayer item in _layer.Values)
+        foreach (int key in _layer.Keys.Reverse())
         {
-            item.Render(audio);
+            if (_layer[key].HitTest(point) is { } drawable)
+            {
+                return drawable;
+            }
         }
+
+        return null;
     }
 }

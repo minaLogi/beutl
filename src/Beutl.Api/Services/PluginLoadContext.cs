@@ -5,17 +5,10 @@ using NuGet.Packaging;
 
 namespace Beutl.Api.Services;
 
-// Todo: 最初に許可されたアセンブリのリストから探すようにする。
-public class PluginLoadContext : AssemblyLoadContext
+public class PluginLoadContext(string mainDirectory, PackageFolderReader? reader = null) : AssemblyLoadContext(isCollectible: true)
 {
-    private readonly AssemblyDependencyResolver _resolver;
-    private readonly PluginDependencyResolver _pluginResolver;
-
-    public PluginLoadContext(string mainDirectory, PackageFolderReader? reader = null) : base(isCollectible: true)
-    {
-        _resolver = new AssemblyDependencyResolver(AppContext.BaseDirectory);
-        _pluginResolver = new PluginDependencyResolver(mainDirectory, reader);
-    }
+    private readonly AssemblyDependencyResolver _resolver = new AssemblyDependencyResolver(AppContext.BaseDirectory);
+    private readonly PluginDependencyResolver _pluginResolver = new PluginDependencyResolver(mainDirectory, reader);
 
     protected override Assembly? Load(AssemblyName name)
     {
@@ -34,8 +27,7 @@ public class PluginLoadContext : AssemblyLoadContext
             }
         }
 
-        var a = base.Load(name);
-        return a;
+        return base.Load(name);
     }
 
     protected override IntPtr LoadUnmanagedDll(string unmanagedDllName)

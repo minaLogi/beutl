@@ -6,6 +6,8 @@ using Beutl.Services;
 using NuGet.Packaging.Core;
 using NuGet.Versioning;
 
+using OpenTelemetry.Trace;
+
 using Reactive.Bindings;
 
 using Serilog;
@@ -14,10 +16,10 @@ using LibraryService = Beutl.Api.Services.LibraryService;
 
 namespace Beutl.ViewModels.ExtensionsPages.DiscoverPages;
 
-public sealed class PublicPackageDetailsPageViewModel : BasePageViewModel
+public sealed class PublicPackageDetailsPageViewModel : BasePageViewModel, ISupportRefreshViewModel
 {
     private readonly ILogger _logger = Log.ForContext<PublicPackageDetailsPageViewModel>();
-    private readonly CompositeDisposable _disposables = new();
+    private readonly CompositeDisposable _disposables = [];
     private readonly InstalledPackageRepository _installedPackageRepository;
     private readonly PackageChangesQueue _queue;
     private readonly LibraryService _library;
@@ -39,36 +41,50 @@ public sealed class PublicPackageDetailsPageViewModel : BasePageViewModel
         Refresh = new AsyncReactiveCommand(IsBusy.Not())
             .WithSubscribe(async () =>
             {
+                using Activity? activity = Telemetry.StartActivity("PublicPackageDetailsPage.Refresh");
+
                 try
                 {
-                    IsBusy.Value = true;
-                    await package.RefreshAsync();
-                    int totalCount = 0;
-                    int prevCount = 0;
-
-                    do
+                    using (await _app.Lock.LockAsync())
                     {
-                        Release[] array = await package.GetReleasesAsync(totalCount, 30);
-                        if (Array.Find(array, x => x.IsPublic.Value) is { } publicRelease)
+                        activity?.AddEvent(new("Entered_AsyncLock"));
+                        IsBusy.Value = true;
+                        AllReleases.Clear();
+                        LatestRelease.Value = null;
+                        await Package.RefreshAsync();
+
+                        int totalCount = 0;
+                        int prevCount = 0;
+
+                        do
                         {
-                            LatestRelease.Value = publicRelease;
-                            break;
+                            Release[] array = await package.GetReleasesAsync(totalCount, 30);
+                            AllReleases.AddRange(array);
+
+                            if (LatestRelease.Value == null
+                                && Array.Find(array, x => x.IsPublic.Value) is { } publicRelease)
+                            {
+                                LatestRelease.Value = publicRelease;
+                                SelectedRelease.Value = publicRelease;
+                            }
+
+                            totalCount += array.Length;
+                            prevCount = array.Length;
+                        } while (prevCount == 30);
+
+                        if (_installedPackageRepository.ExistsPackage(package.Name))
+                        {
+                            PackageIdentity mostLatested = _installedPackageRepository.GetLocalPackages(package.Name)
+                                .Aggregate((x, y) => x.Version > y.Version ? x : y);
+
+                            CurrentRelease.Value = await package.GetReleaseAsync(mostLatested.Version.ToString());
                         }
-
-                        totalCount += array.Length;
-                        prevCount = array.Length;
-                    } while (prevCount == 30);
-
-                    if (_installedPackageRepository.ExistsPackage(package.Name))
-                    {
-                        PackageIdentity mostLatested = _installedPackageRepository.GetLocalPackages(package.Name)
-                            .Aggregate((x, y) => x.Version > y.Version ? x : y);
-
-                        CurrentRelease.Value = await package.GetReleaseAsync(mostLatested.Version.ToString());
                     }
                 }
                 catch (Exception e)
                 {
+                    activity?.SetStatus(ActivityStatusCode.Error);
+                    activity?.RecordException(e);
                     ErrorHandle(e);
                     _logger.Error(e, "An unexpected error has occurred.");
                 }
@@ -86,51 +102,93 @@ public sealed class PublicPackageDetailsPageViewModel : BasePageViewModel
             .ToReadOnlyReactivePropertySlim()
             .DisposeWith(_disposables);
 
-        IObservable<bool> installed = _installedPackageRepository.GetObservable(package.Name);
-        IsInstallButtonVisible = installed
-            .AnyTrue(CanCancel)
-            .Not()
+        CanInstallOrUpdate = SelectedRelease.Select(v =>
+            {
+#pragma warning disable CS0436 // 型がインポートされた型と競合しています
+                const string beutlVersion = ThisAssembly.NuGetPackageVersion;
+#pragma warning restore CS0436 // 型がインポートされた型と競合しています
+
+                if (v?.TargetVersion?.Value is { } target
+                    && VersionRange.TryParse(target, out VersionRange? versionRange)
+                    && NuGetVersion.TryParse(beutlVersion, out NuGetVersion? version))
+                {
+                    return versionRange.Satisfies(version);
+                }
+                else
+                {
+                    return true;
+                }
+            })
             .ToReadOnlyReactivePropertySlim()
             .DisposeWith(_disposables);
 
-        IsUpdateButtonVisible = LatestRelease.CombineLatest(CurrentRelease)
+        IObservable<bool> installed = _installedPackageRepository.GetObservable(package.Name);
+        IsInstallButtonVisible = installed.Not()
+            .AreTrue(CanCancel.Not(), CanInstallOrUpdate)
+            .ToReadOnlyReactivePropertySlim()
+            .DisposeWith(_disposables);
+
+        IsUpdateButtonVisible = CurrentRelease.CombineLatest(SelectedRelease)
+            .Select(x => x.First != null && x.First.Version.Value != x.Second?.Version.Value)
+            .AreTrue(CanCancel.Not(), CanInstallOrUpdate)
+            .ToReadOnlyReactivePropertySlim()
+            .DisposeWith(_disposables);
+
+        IsUninstallButtonVisible = installed
+            .AreTrue(CanCancel.Not())
+            .ToReadOnlyReactivePropertySlim()
+            .DisposeWith(_disposables);
+
+        Downgrade = SelectedRelease.CombineLatest(CurrentRelease)
             .Select(x =>
             {
-                if (x.First is { } latest && x.Second is { } current)
+                if (x.First is { } selected && x.Second is { } current)
                 {
-                    return NuGetVersion.Parse(latest.Version.Value).CompareTo(NuGetVersion.Parse(current.Version.Value)) > 0;
+                    return NuGetVersion.Parse(selected.Version.Value).CompareTo(NuGetVersion.Parse(current.Version.Value)) < 0;
                 }
                 else
                 {
                     return false;
                 }
             })
-            .AreTrue(CanCancel.Not())
             .ToReadOnlyReactivePropertySlim()
             .DisposeWith(_disposables);
 
-        IsUninstallButtonVisible = installed
-            .AreTrue(CanCancel.Not(), IsUpdateButtonVisible.Not())
+        SelectingLatestVersion = SelectedRelease.CombineLatest(LatestRelease)
+            .Select(x => x.First?.Version?.Value == x.Second?.Version?.Value)
             .ToReadOnlyReactivePropertySlim()
             .DisposeWith(_disposables);
 
         Install = new AsyncReactiveCommand(IsBusy.Not())
             .WithSubscribe(async () =>
             {
+                using Activity? activity = Telemetry.StartActivity("PublicPackageDetailsPage.Install");
+
                 try
                 {
                     IsBusy.Value = true;
-                    await _app.AuthorizedUser.Value!.RefreshAsync();
+                    using (await _app.Lock.LockAsync())
+                    {
+                        activity?.AddEvent(new("Entered_AsyncLock"));
+                        await _app.AuthorizedUser.Value!.RefreshAsync();
 
-                    Release release = await _library.GetPackage(Package);
-                    var packageId = new PackageIdentity(Package.Name, new NuGetVersion(release.Version.Value));
-                    _queue.InstallQueue(packageId);
-                    NotificationService.ShowInformation(
-                        title: ExtensionsPage.PackageInstaller,
-                        message: string.Format(ExtensionsPage.PackageInstaller_ScheduledInstallation, package));
+                        Release release = await _library.GetPackage(Package);
+                        if (SelectedRelease.Value != null)
+                        {
+                            release = SelectedRelease.Value;
+                        }
+
+                        var packageId = new PackageIdentity(Package.Name, new NuGetVersion(release.Version.Value));
+                        _queue.InstallQueue(packageId);
+                        NotificationService.ShowInformation(
+                            title: ExtensionsPage.PackageInstaller,
+                            message: string.Format(ExtensionsPage.PackageInstaller_ScheduledInstallation, package));
+                    }
                 }
                 catch (Exception e)
                 {
+                    activity?.SetStatus(ActivityStatusCode.Error);
+                    activity?.RecordException(e);
                     ErrorHandle(e);
                     _logger.Error(e, "An unexpected error has occurred.");
                 }
@@ -144,19 +202,33 @@ public sealed class PublicPackageDetailsPageViewModel : BasePageViewModel
         Update = new AsyncReactiveCommand(IsBusy.Not())
             .WithSubscribe(async () =>
             {
+                using Activity? activity = Telemetry.StartActivity("PublicPackageDetailsPage.Update");
+
                 try
                 {
                     IsBusy.Value = true;
-                    await _app.AuthorizedUser.Value!.RefreshAsync();
-                    Release release = await _library.GetPackage(Package);
-                    var packageId = new PackageIdentity(Package.Name, new NuGetVersion(release.Version.Value));
-                    _queue.InstallQueue(packageId);
-                    NotificationService.ShowInformation(
-                        title: ExtensionsPage.PackageInstaller,
-                        message: string.Format(ExtensionsPage.PackageInstaller_ScheduledUpdate, packageId));
+                    using (await _app.Lock.LockAsync())
+                    {
+                        activity?.AddEvent(new("Entered_AsyncLock"));
+                        await _app.AuthorizedUser.Value!.RefreshAsync();
+
+                        Release release = await _library.GetPackage(Package);
+                        if (SelectedRelease.Value != null)
+                        {
+                            release = SelectedRelease.Value;
+                        }
+
+                        var packageId = new PackageIdentity(Package.Name, new NuGetVersion(release.Version.Value));
+                        _queue.InstallQueue(packageId);
+                        NotificationService.ShowInformation(
+                            title: ExtensionsPage.PackageInstaller,
+                            message: string.Format(ExtensionsPage.PackageInstaller_ScheduledUpdate, packageId));
+                    }
                 }
                 catch (Exception e)
                 {
+                    activity?.SetStatus(ActivityStatusCode.Error);
+                    activity?.RecordException(e);
                     ErrorHandle(e);
                     _logger.Error(e, "An unexpected error has occurred.");
                 }
@@ -218,6 +290,10 @@ public sealed class PublicPackageDetailsPageViewModel : BasePageViewModel
 
     public ReadOnlyReactivePropertySlim<string> DisplayName { get; }
 
+    public CoreList<Release> AllReleases { get; } = [];
+
+    public ReactivePropertySlim<Release?> SelectedRelease { get; } = new();
+
     public ReactivePropertySlim<Release?> LatestRelease { get; } = new();
 
     public ReactivePropertySlim<Release?> CurrentRelease { get; } = new();
@@ -229,6 +305,12 @@ public sealed class PublicPackageDetailsPageViewModel : BasePageViewModel
     public ReadOnlyReactivePropertySlim<bool> IsUpdateButtonVisible { get; }
 
     public ReadOnlyReactivePropertySlim<bool> CanCancel { get; }
+
+    public ReadOnlyReactivePropertySlim<bool> Downgrade { get; }
+
+    public ReadOnlyReactivePropertySlim<bool> SelectingLatestVersion { get; }
+
+    public ReadOnlyReactivePropertySlim<bool> CanInstallOrUpdate { get; }
 
     public AsyncReactiveCommand Install { get; }
 

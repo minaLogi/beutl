@@ -1,6 +1,5 @@
 ﻿using Beutl.Animation;
 using Beutl.Commands;
-using Beutl.ProjectSystem;
 
 using Reactive.Bindings;
 
@@ -8,7 +7,7 @@ namespace Beutl.ViewModels;
 
 public sealed class InlineKeyFrameViewModel : IDisposable
 {
-    private readonly CompositeDisposable _disposables = new();
+    private readonly CompositeDisposable _disposables = [];
     private readonly InlineAnimationLayerViewModel _parent;
 
     public InlineKeyFrameViewModel(IKeyFrame keyframe, IKeyFrameAnimation animation, InlineAnimationLayerViewModel parent)

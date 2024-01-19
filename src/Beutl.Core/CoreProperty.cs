@@ -1,18 +1,22 @@
 ﻿using System.Diagnostics.CodeAnalysis;
 using System.Reactive.Subjects;
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
+
+using Beutl.Serialization;
 
 namespace Beutl;
 
+[JsonConverter(typeof(CorePropertyJsonConverter))]
 public abstract class CoreProperty : ICoreProperty
 {
     private static int s_nextId = 0;
     private readonly ICorePropertyMetadata _defaultMetadata;
-    private readonly Dictionary<Type, ICorePropertyMetadata> _metadata = new();
-    private readonly Dictionary<Type, ICorePropertyMetadata> _metadataCache = new();
+    private readonly Dictionary<Type, ICorePropertyMetadata> _metadata = [];
+    private readonly Dictionary<Type, ICorePropertyMetadata> _metadataCache = [];
+    private readonly object _metadataLock = new();
     private bool _hasMetadataOverrides;
     private bool _isTryedToGetPropertyInfo;
 
@@ -70,9 +74,15 @@ public abstract class CoreProperty : ICoreProperty
 
     internal abstract void NotifyChanged(CorePropertyChangedEventArgs e);
 
+    [ObsoleteSerializationApi]
     internal abstract JsonNode? RouteWriteToJson(CorePropertyMetadata metadata, object? value);
 
+    [ObsoleteSerializationApi]
     internal abstract object? RouteReadFromJson(CorePropertyMetadata metadata, JsonNode? node);
+
+    internal abstract void RouteSerialize(ICoreSerializationContext context, object? value);
+
+    internal abstract Optional<object?> RouteDeserialize(ICoreSerializationContext context);
 
     protected abstract IObservable<CorePropertyChangedEventArgs> GetChanged();
 
@@ -86,12 +96,15 @@ public abstract class CoreProperty : ICoreProperty
     public TMetadata GetMetadata<TMetadata>(Type type)
         where TMetadata : ICorePropertyMetadata
     {
-        if (!_hasMetadataOverrides)
+        lock (_metadataLock)
         {
-            return (TMetadata)_defaultMetadata;
-        }
+            if (!_hasMetadataOverrides)
+            {
+                return (TMetadata)_defaultMetadata;
+            }
 
-        return GetMetadataWithOverrides<TMetadata>(type) ?? throw new InvalidOperationException();
+            return GetMetadataWithOverrides<TMetadata>(type) ?? throw new InvalidOperationException();
+        }
     }
 
     public bool TryGetMetadata<T, TMetadata>([NotNullWhen(true)] out TMetadata? result)
@@ -104,15 +117,18 @@ public abstract class CoreProperty : ICoreProperty
     public bool TryGetMetadata<TMetadata>(Type type, [NotNullWhen(true)] out TMetadata? result)
         where TMetadata : ICorePropertyMetadata
     {
-        if (!_hasMetadataOverrides && _defaultMetadata is TMetadata metadata)
+        lock (_metadataLock)
         {
-            result = metadata;
-            return true;
-        }
-        else
-        {
-            result = GetMetadataWithOverrides<TMetadata>(type);
-            return result != null;
+            if (!_hasMetadataOverrides && _defaultMetadata is TMetadata metadata)
+            {
+                result = metadata;
+                return true;
+            }
+            else
+            {
+                result = GetMetadataWithOverrides<TMetadata>(type);
+                return result != null;
+            }
         }
     }
 
@@ -124,56 +140,59 @@ public abstract class CoreProperty : ICoreProperty
 
     public void OverrideMetadata(Type type, CorePropertyMetadata metadata)
     {
-        _ = type ?? throw new ArgumentNullException(nameof(type));
-        _ = metadata ?? throw new ArgumentNullException(nameof(metadata));
-
-        if (metadata.PropertyType != PropertyType)
-            throw new InvalidOperationException("Property type mismatch.");
-
-        if (_metadata.ContainsKey(type))
+        lock (_metadataLock)
         {
-            throw new InvalidOperationException(
-                $"Metadata is already set for {Name} on {type}.");
+            _ = type ?? throw new ArgumentNullException(nameof(type));
+            _ = metadata ?? throw new ArgumentNullException(nameof(metadata));
+
+            if (metadata.PropertyType != PropertyType)
+                throw new InvalidOperationException("Property type mismatch.");
+
+            if (_metadata.ContainsKey(type))
+            {
+                throw new InvalidOperationException(
+                    $"Metadata is already set for {Name} on {type}.");
+            }
+
+            CorePropertyMetadata? baseMetadata = GetMetadata<CorePropertyMetadata>(type);
+            metadata.Merge(baseMetadata, this);
+            _metadata.Add(type, metadata);
+            _metadataCache.Clear();
+
+            _hasMetadataOverrides = true;
         }
-
-        CorePropertyMetadata? baseMetadata = GetMetadata<CorePropertyMetadata>(type);
-        metadata.Merge(baseMetadata, this);
-        _metadata.Add(type, metadata);
-        _metadataCache.Clear();
-
-        _hasMetadataOverrides = true;
     }
 
     private TMetadata? GetMetadataWithOverrides<TMetadata>(Type type)
         where TMetadata : ICorePropertyMetadata
     {
-        if (type is null)
+        lock (_metadataLock)
         {
-            throw new ArgumentNullException(nameof(type));
-        }
+            ArgumentNullException.ThrowIfNull(type);
 
-        if (_metadataCache.TryGetValue(type, out ICorePropertyMetadata? result) && result is TMetadata resultT)
-        {
-            return resultT;
-        }
-
-        Type? currentType = type;
-
-        while (currentType != null)
-        {
-            if (_metadata.TryGetValue(currentType, out result) && result is TMetadata resultT1)
+            if (_metadataCache.TryGetValue(type, out ICorePropertyMetadata? result) && result is TMetadata resultT)
             {
-                _metadataCache[type] = result;
-
-                return resultT1;
+                return resultT;
             }
 
-            currentType = currentType.BaseType;
+            Type? currentType = type;
+
+            while (currentType != null)
+            {
+                if (_metadata.TryGetValue(currentType, out result) && result is TMetadata resultT1)
+                {
+                    _metadataCache[type] = result;
+
+                    return resultT1;
+                }
+
+                currentType = currentType.BaseType;
+            }
+
+            _metadataCache[type] = _defaultMetadata;
+
+            return _defaultMetadata is TMetadata metadata ? metadata : default;
         }
-
-        _metadataCache[type] = _defaultMetadata;
-
-        return _defaultMetadata is TMetadata metadata ? metadata : default;
     }
 
     public override bool Equals(object? obj)
@@ -187,18 +206,13 @@ public abstract class CoreProperty : ICoreProperty
     }
 }
 
-public class CoreProperty<T> : CoreProperty
+public class CoreProperty<T>(
+    string name,
+    Type ownerType,
+    CorePropertyMetadata<T> metadata)
+    : CoreProperty(name, typeof(T), ownerType, metadata)
 {
-    private readonly Subject<CorePropertyChangedEventArgs<T>> _changed;
-
-    public CoreProperty(
-        string name,
-        Type ownerType,
-        CorePropertyMetadata<T> metadata)
-        : base(name, typeof(T), ownerType, metadata)
-    {
-        _changed = new();
-    }
+    private readonly Subject<CorePropertyChangedEventArgs<T>> _changed = new();
 
     public new IObservable<CorePropertyChangedEventArgs<T>> Changed => _changed;
 
@@ -237,6 +251,8 @@ public class CoreProperty<T> : CoreProperty
         return o.GetValue<T>(this);
     }
 
+    [ObsoleteSerializationApi]
+    [SuppressMessage("Performance", "CA1869:'JsonSerializerOptions' インスタンスをキャッシュして再利用する", Justification = "<保留中>")]
     internal override JsonNode? RouteWriteToJson(CorePropertyMetadata metadata, object? value)
     {
         var typedMetadata = (CorePropertyMetadata<T>)metadata;
@@ -268,6 +284,8 @@ public class CoreProperty<T> : CoreProperty
         }
     }
 
+    [ObsoleteSerializationApi]
+    [SuppressMessage("Performance", "CA1869:'JsonSerializerOptions' インスタンスをキャッシュして再利用する", Justification = "<保留中>")]
     internal override object? RouteReadFromJson(CorePropertyMetadata metadata, JsonNode? node)
     {
         var typedMetadata = (CorePropertyMetadata<T>)metadata;
@@ -311,5 +329,53 @@ public class CoreProperty<T> : CoreProperty
     protected override IObservable<CorePropertyChangedEventArgs> GetChanged()
     {
         return Changed;
+    }
+
+    internal override void RouteSerialize(ICoreSerializationContext context, object? value)
+    {
+        CorePropertyMetadata<T> metadata = GetMetadata<CorePropertyMetadata<T>>(context.OwnerType);
+        if (metadata.ShouldSerialize && (this is not IStaticProperty sprop || sprop.CanWrite))
+        {
+            if (context is IJsonSerializationContext jsonCtxt
+                && metadata.JsonConverter is { }
+                && value != null)
+            {
+                JsonSerializerOptions options = metadata.GetSerializerOptions();
+                JsonNode? node = JsonSerializer.SerializeToNode(value, PropertyType, options);
+                jsonCtxt.SetNode(Name, PropertyType, value.GetType(), node);
+            }
+            else
+            {
+                context.SetValue(Name, (T?)value);
+            }
+        }
+    }
+
+    internal override Optional<object?> RouteDeserialize(ICoreSerializationContext context)
+    {
+        CorePropertyMetadata<T> metadata = GetMetadata<CorePropertyMetadata<T>>(context.OwnerType);
+        if (metadata.ShouldSerialize && (this is not IStaticProperty sprop || sprop.CanWrite))
+        {
+            if (context is IJsonSerializationContext jsonCtxt
+                && metadata.JsonConverter is { })
+            {
+                Type type = PropertyType;
+                JsonNode? node = jsonCtxt.GetNode(Name);
+
+                JsonSerializerOptions options = metadata.GetSerializerOptions();
+                return JsonSerializer.Deserialize(node, type, options);
+            }
+
+            if (context.Contains(Name))
+            {
+                return new Optional<object?>(context.GetValue<T>(Name));
+            }
+            else
+            {
+                return default;
+            }
+        }
+
+        return default;
     }
 }

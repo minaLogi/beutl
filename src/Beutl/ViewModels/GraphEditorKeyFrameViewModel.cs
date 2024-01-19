@@ -2,9 +2,7 @@
 using Avalonia.Media;
 
 using Beutl.Animation;
-using Beutl.Animation.Easings;
 using Beutl.Commands;
-using Beutl.ProjectSystem;
 
 using Reactive.Bindings;
 using Reactive.Bindings.Extensions;
@@ -15,7 +13,7 @@ namespace Beutl.ViewModels;
 
 public sealed class GraphEditorKeyFrameViewModel : IDisposable
 {
-    private readonly CompositeDisposable _disposables = new();
+    private readonly CompositeDisposable _disposables = [];
     private readonly GraphEditorViewViewModel _parent;
     internal readonly ReactivePropertySlim<GraphEditorKeyFrameViewModel?> _previous = new();
     internal GraphEditorKeyFrameViewModel? _next;
@@ -203,45 +201,49 @@ public sealed class GraphEditorKeyFrameViewModel : IDisposable
         return (x, y);
     }
 
-    public bool UpdateControlPoint1(Point point)
+    public void UpdateControlPoint1(Point point)
     {
         if (Model.Easing is SplineEasing splineEasing)
         {
             (double x, double y) = CoerceControlPoint(point);
 
-            if (double.IsFinite(x) && double.IsFinite(y))
+            if (double.IsFinite(x))
             {
                 splineEasing.X1 = (float)x;
+            }
+            if (double.IsFinite(y))
+            {
                 splineEasing.Y1 = (float)y;
-                return true;
             }
         }
-
-        return false;
     }
 
-    public bool UpdateControlPoint2(Point point)
+    public void UpdateControlPoint2(Point point)
     {
         if (Model.Easing is SplineEasing splineEasing)
         {
             (double x, double y) = CoerceControlPoint(point);
 
-            if (double.IsFinite(x) && double.IsFinite(y))
+            if (double.IsFinite(x))
             {
                 splineEasing.X2 = (float)x;
+            }
+            if (double.IsFinite(y))
+            {
                 splineEasing.Y2 = (float)y;
-                return true;
             }
         }
-
-        return false;
     }
 
     public void SubmitControlPoint1(float oldX, float oldY)
     {
         if (Model.Easing is SplineEasing splineEasing)
         {
-            var command = new SubmitControlPointCommand((oldX, oldY), (splineEasing.X1, splineEasing.Y1), splineEasing, true);
+            var oldValues = (oldX, oldY);
+            var newValues = (splineEasing.X1, splineEasing.Y1);
+            if (oldValues == newValues)
+                return;
+            var command = new SubmitControlPointCommand(oldValues, newValues, splineEasing, true);
             command.DoAndRecord(CommandRecorder.Default);
         }
     }
@@ -250,7 +252,11 @@ public sealed class GraphEditorKeyFrameViewModel : IDisposable
     {
         if (Model.Easing is SplineEasing splineEasing)
         {
-            var command = new SubmitControlPointCommand((oldX, oldY), (splineEasing.X2, splineEasing.Y2), splineEasing, false);
+            var oldValues = (oldX, oldY);
+            var newValues = (splineEasing.X2, splineEasing.Y2);
+            if (oldValues == newValues)
+                return;
+            var command = new SubmitControlPointCommand(oldValues, newValues, splineEasing, false);
             command.DoAndRecord(CommandRecorder.Default);
         }
     }
@@ -293,32 +299,21 @@ public sealed class GraphEditorKeyFrameViewModel : IDisposable
         Right.Value = Model.KeyTime.ToPixel(_parent.Parent.Options.Value.Scale);
     }
 
-    private sealed class SubmitControlPointCommand : IRecordableCommand
+    private sealed class SubmitControlPointCommand(
+        (float, float) oldValue, (float, float) newValue, SplineEasing splineEasing, bool first)
+        : IRecordableCommand
     {
-        private readonly (float, float) _oldValue;
-        private readonly (float, float) _newValue;
-        private readonly SplineEasing _splineEasing;
-        private readonly bool _first;
-
-        public SubmitControlPointCommand((float, float) oldValue, (float, float) newValue, SplineEasing splineEasing, bool first)
-        {
-            _oldValue = oldValue;
-            _newValue = newValue;
-            _splineEasing = splineEasing;
-            _first = first;
-        }
-
         public void Do()
         {
-            if (_first)
+            if (first)
             {
-                _splineEasing.X1 = _newValue.Item1;
-                _splineEasing.Y1 = _newValue.Item2;
+                splineEasing.X1 = newValue.Item1;
+                splineEasing.Y1 = newValue.Item2;
             }
             else
             {
-                _splineEasing.X2 = _newValue.Item1;
-                _splineEasing.Y2 = _newValue.Item2;
+                splineEasing.X2 = newValue.Item1;
+                splineEasing.Y2 = newValue.Item2;
             }
         }
 
@@ -326,48 +321,34 @@ public sealed class GraphEditorKeyFrameViewModel : IDisposable
 
         public void Undo()
         {
-            if (_first)
+            if (first)
             {
-                _splineEasing.X1 = _oldValue.Item1;
-                _splineEasing.Y1 = _oldValue.Item2;
+                splineEasing.X1 = oldValue.Item1;
+                splineEasing.Y1 = oldValue.Item2;
             }
             else
             {
-                _splineEasing.X2 = _oldValue.Item1;
-                _splineEasing.Y2 = _oldValue.Item2;
+                splineEasing.X2 = oldValue.Item1;
+                splineEasing.Y2 = oldValue.Item2;
             }
         }
     }
 
-    private sealed class SubmitKeyFrameCommand : IRecordableCommand
+    private sealed class SubmitKeyFrameCommand(IKeyFrame keyframe, TimeSpan oldTime, TimeSpan newTime, object? oldValue, object? newValue)
+        : IRecordableCommand
     {
-        private readonly IKeyFrame _keyframe;
-        private readonly TimeSpan _oldTime;
-        private readonly TimeSpan _newTime;
-        private readonly object? _oldValue;
-        private readonly object? _newValue;
-
-        public SubmitKeyFrameCommand(IKeyFrame keyframe, TimeSpan oldTime, TimeSpan newTime, object? oldValue, object? newValue)
-        {
-            _keyframe = keyframe;
-            _oldTime = oldTime;
-            _newTime = newTime;
-            _oldValue = oldValue;
-            _newValue = newValue;
-        }
-
         public void Do()
         {
-            _keyframe.Value = _newValue;
-            _keyframe.KeyTime = _newTime;
+            keyframe.Value = newValue;
+            keyframe.KeyTime = newTime;
         }
 
         public void Redo() => Do();
 
         public void Undo()
         {
-            _keyframe.Value = _oldValue;
-            _keyframe.KeyTime = _oldTime;
+            keyframe.Value = oldValue;
+            keyframe.KeyTime = oldTime;
         }
     }
 }

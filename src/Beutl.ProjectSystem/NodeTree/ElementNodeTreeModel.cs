@@ -11,7 +11,7 @@ namespace Beutl.NodeTree;
 public class ElementNodeTreeModel : NodeTreeModel
 {
     // 評価する順番
-    private readonly List<NodeEvaluationContext[]> _evalContexts = new();
+    private readonly List<NodeEvaluationContext[]> _evalContexts = [];
     private bool _isDirty = true;
 
     public ElementNodeTreeModel()
@@ -45,36 +45,46 @@ public class ElementNodeTreeModel : NodeTreeModel
         obj.Invalidated -= OnNodeInvalidated;
     }
 
-    public void Evaluate(IRenderer renderer, Element layer)
+    public PooledList<Renderable> Evaluate(EvaluationTarget target, IRenderer renderer, Element element)
     {
-        Build(renderer, layer.Clock);
-        using var list = new PooledList<Renderable>();
+        _ = target;
+        Build(renderer, element.Clock);
 
-        foreach (NodeEvaluationContext[]? item in CollectionsMarshal.AsSpan(_evalContexts))
+        var list = new PooledList<Renderable>();
+        try
         {
-            foreach (NodeEvaluationContext? context in item)
+            foreach (NodeEvaluationContext[]? item in CollectionsMarshal.AsSpan(_evalContexts))
             {
-                context._renderables = list;
+                foreach (NodeEvaluationContext? context in item)
+                {
+                    context.Target = target;
+                    context._renderables = list;
 
-                context.Node.PreEvaluate(context);
-                context.Node.Evaluate(context);
-                context.Node.PostEvaluate(context);
+                    context.Node.PreEvaluate(context);
+                    context.Node.Evaluate(context);
+                    context.Node.PostEvaluate(context);
+                }
             }
-        }
 
-        // Todo: LayerOutputNodeに移動
-        foreach (Renderable item in list.Span)
+            // Todo: LayerOutputNodeに移動
+            foreach (Renderable item in list.Span)
+            {
+                item.ZIndex = element.ZIndex;
+                item.TimeRange = new TimeRange(element.Start, element.Length);
+            }
+
+            return list;
+        }
+        catch
         {
-            item.ZIndex = layer.ZIndex;
-            item.TimeRange = new TimeRange(layer.Start, layer.Length);
+            list.Dispose();
+            throw;
         }
-
-        renderer.RenderScene[layer.ZIndex].UpdateAll(list);
     }
 
     private void Uninitialize()
     {
-        foreach (var item in CollectionsMarshal.AsSpan(_evalContexts))
+        foreach (NodeEvaluationContext[]? item in CollectionsMarshal.AsSpan(_evalContexts))
         {
             foreach (NodeEvaluationContext? context in item.AsSpan())
             {
@@ -96,7 +106,7 @@ public class ElementNodeTreeModel : NodeTreeModel
             foreach (Node? lastNode in Nodes.Where(x => !x.Items.Any(x => x is IOutputSocket)))
             {
                 BuildNode(lastNode, stack);
-                NodeEvaluationContext[] array = stack.ToArray();
+                NodeEvaluationContext[] array = [.. stack];
                 Array.Reverse(array);
 
                 _evalContexts.Add(array);

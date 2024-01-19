@@ -3,6 +3,9 @@
 using Beutl.Api;
 using Beutl.Api.Objects;
 using Beutl.Api.Services;
+using Beutl.Services;
+
+using OpenTelemetry.Trace;
 
 using Reactive.Bindings;
 
@@ -22,6 +25,7 @@ public sealed class UpdatePackageDialogViewModel
         _discoverService = discoverService;
         SelectedFile.Subscribe(async file =>
         {
+            using Activity? activity = Telemetry.StartActivity("UpdatePackageDialog.SelectFile");
             try
             {
                 IsFileLoading.Value = true;
@@ -41,6 +45,8 @@ public sealed class UpdatePackageDialogViewModel
             }
             catch (Exception ex)
             {
+                activity?.SetStatus(ActivityStatusCode.Error);
+                activity?.RecordException(ex);
                 Error.Value = Message.AnUnexpectedErrorHasOccurred;
                 _logger.Error(ex, "An unexpected error has occurred.");
             }
@@ -69,54 +75,62 @@ public sealed class UpdatePackageDialogViewModel
 
     public async Task<Release?> UpdateAsync()
     {
+        using Activity? activity = Telemetry.StartActivity("UpdatePackageDialog.Update");
         try
         {
-            LocalPackage? localPackage = LocalPackage.Value;
-            if (!IsValid.Value || localPackage == null)
+            using (await _user.Lock.LockAsync())
             {
-                return null;
+                LocalPackage? localPackage = LocalPackage.Value;
+                if (!IsValid.Value || localPackage == null)
+                {
+                    return null;
+                }
+
+                await _user.RefreshAsync();
+
+                var request = new UpdatePackageRequest(
+                    description: localPackage.Description,
+                    display_name: localPackage.DisplayName,
+                    logo_image_id: null,
+                    @public: null,
+                    screenshots: null,
+                    short_description: localPackage.ShortDescription,
+                    tags: localPackage.Tags,
+                    website: localPackage.WebSite);
+
+                Package? package;
+                try
+                {
+                    package = await _discoverService.GetPackage(localPackage.Name);
+                }
+                catch
+                {
+                    package = await _user.Profile.AddPackageAsync(localPackage.Name);
+                }
+
+                await package.UpdateAsync(
+                    description: localPackage.Description,
+                    displayName: localPackage.DisplayName,
+                    shortDescription: localPackage.ShortDescription,
+                    tags: localPackage.Tags,
+                    website: localPackage.WebSite);
+
+                return Result = await package.AddReleaseAsync(
+                    localPackage.Version, new CreateReleaseRequest("", localPackage.TargetVersion, localPackage.Version));
             }
-
-            await _user.RefreshAsync();
-
-            var request = new UpdatePackageRequest(
-                description: localPackage.Description,
-                display_name: localPackage.DisplayName,
-                logo_image_id: null,
-                @public: null,
-                screenshots: null,
-                short_description: localPackage.ShortDescription,
-                tags: localPackage.Tags,
-                website: localPackage.WebSite);
-
-            Package? package;
-            try
-            {
-                package = await _discoverService.GetPackage(localPackage.Name);
-            }
-            catch
-            {
-                package = await _user.Profile.AddPackageAsync(localPackage.Name);
-            }
-
-            await package.UpdateAsync(
-                description: localPackage.Description,
-                displayName: localPackage.DisplayName,
-                shortDescription: localPackage.ShortDescription,
-                tags: localPackage.Tags,
-                website: localPackage.WebSite);
-
-            return Result = await package.AddReleaseAsync(
-                localPackage.Version, new CreateReleaseRequest("", localPackage.Version));
         }
         catch (BeutlApiException<ApiErrorResponse> e)
         {
+            activity?.SetStatus(ActivityStatusCode.Error);
+            activity?.RecordException(e);
             Error.Value = e.Result.Message;
             _logger.Error(e, "API error occurred.");
             return null;
         }
         catch (Exception e)
         {
+            activity?.SetStatus(ActivityStatusCode.Error);
+            activity?.RecordException(e);
             Error.Value = Message.AnUnexpectedErrorHasOccurred;
             _logger.Error(e, "An unexpected error has occurred.");
             return null;

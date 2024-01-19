@@ -25,7 +25,7 @@ public class AlignmentXEditor : PropertyEditor
     private const string LeftSelected = ":left-selected";
     private const string CenterSelected = ":center-selected";
     private const string RightSelected = ":right-selected";
-    private readonly CompositeDisposable _disposables = new();
+    private readonly CompositeDisposable _disposables = [];
     private AlignmentX _value;
 
     public AlignmentXEditor()
@@ -75,7 +75,7 @@ public class AlignmentXEditor : PropertyEditor
             }
             else
             {
-                if (!UseCompact)
+                if (EditorStyle != PropertyEditorStyle.Compact)
                     PseudoClasses.Remove(":compact");
             }
         }
@@ -98,9 +98,9 @@ public class AlignmentXEditor : PropertyEditor
             if (value.HasValue)
             {
                 AlignmentX oldValue = Value;
-                RaiseEvent(new PropertyEditorValueChangedEventArgs<AlignmentX>(value.Value, oldValue, ValueChangingEvent));
-                Value = value.Value;
                 RaiseEvent(new PropertyEditorValueChangedEventArgs<AlignmentX>(value.Value, oldValue, ValueChangedEvent));
+                Value = value.Value;
+                RaiseEvent(new PropertyEditorValueChangedEventArgs<AlignmentX>(value.Value, oldValue, ValueConfirmedEvent));
             }
         }
     }

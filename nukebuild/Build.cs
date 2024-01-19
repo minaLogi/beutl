@@ -2,10 +2,15 @@
 using System;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
+using System.Runtime.Serialization.Formatters.Binary;
 using System.Text;
 using System.Xml.Linq;
 
+using static Nuke.Common.Tools.InnoSetup.InnoSetupTasks;
+using Nuke.Common.Tools.NerdbankGitVersioning;
+
 using Serilog;
+using Nuke.Common.Tools.InnoSetup;
 
 partial class Build : NukeBuild
 {
@@ -28,7 +33,9 @@ partial class Build : NukeBuild
 
     [Solution] readonly Solution Solution;
     [GitRepository] readonly GitRepository GitRepository;
-    [GitVersion] readonly GitVersion GitVersion;
+
+    [NerdbankGitVersioning] readonly NerdbankGitVersioning NerdbankVersioning;
+
 
     AbsolutePath SourceDirectory => RootDirectory / "src";
     AbsolutePath TestsDirectory => RootDirectory / "tests";
@@ -72,7 +79,7 @@ partial class Build : NukeBuild
             }
 
             AbsolutePath mainProj = SourceDirectory / "Beutl" / "Beutl.csproj";
-            var mainOutput = OutputDirectory / "Beutl";
+            AbsolutePath mainOutput = OutputDirectory / "Beutl";
 
             DotNetPublish(s => s
                 .EnableNoRestore()
@@ -82,12 +89,12 @@ partial class Build : NukeBuild
                 .SetOutput(mainOutput)
                 .SetProperty("NukePublish", true));
 
-            string[] subProjects = new string[]
-            {
+            string[] subProjects =
+            [
                 "Beutl.ExceptionHandler",
                 "Beutl.PackageTools",
                 "Beutl.WaitingDialog",
-            };
+            ];
             foreach (string item in subProjects)
             {
                 AbsolutePath output = OutputDirectory / item;
@@ -103,14 +110,14 @@ partial class Build : NukeBuild
                     .ForEach(t => CopyFile(t.Source, t.Target));
             }
 
-            string[] asmsToCopy = new string[]
-            {
+            string[] asmsToCopy =
+            [
                 "FluentTextTable",
                 "Kokuban",
                 "Kurukuru",
                 "Sharprompt",
                 "DeviceId",
-            };
+            ];
             foreach (string asm in asmsToCopy)
             {
                 foreach (string item in subProjects)
@@ -129,7 +136,7 @@ partial class Build : NukeBuild
         {
             AbsolutePath mainOutput = OutputDirectory / "Beutl";
 
-            // Eg: Beutl-main-0.0.0+0000.zip
+            // Eg: Beutl-0.0.0+0000.zip
             var fileName = new StringBuilder();
             fileName.Append("Beutl");
             if (Runtime != null)
@@ -143,12 +150,23 @@ partial class Build : NukeBuild
             }
 
             fileName.Append('-');
-            fileName.Append(GitVersion.EscapedBranchName);
-            fileName.Append('-');
-            fileName.Append(GitVersion.FullSemVer);
+            fileName.Append(NerdbankVersioning.SemVer2);
             fileName.Append(".zip");
 
             mainOutput.CompressTo(ArtifactsDirectory / fileName.ToString());
+        });
+
+    Target BuildInstaller => _ => _
+        .DependsOn(Publish)
+        .Executes(() =>
+        {
+            InnoSetup(c => c
+                .SetKeyValueDefinition("MyAppVersion", NerdbankVersioning.AssemblyFileVersion)
+                .SetKeyValueDefinition("MyOutputDir", ArtifactsDirectory)
+                .SetKeyValueDefinition("MyLicenseFile", RootDirectory / "LICENSE")
+                .SetKeyValueDefinition("MySetupIconFile", RootDirectory / "assets/logos/logo.ico")
+                .SetKeyValueDefinition("MySource", OutputDirectory / "Beutl")
+                .SetScriptFile(RootDirectory / "nukebuild/beutl-setup.iss"));
         });
 
     bool IsSupportedRid(DotNetRuntimeIdentifier rid)

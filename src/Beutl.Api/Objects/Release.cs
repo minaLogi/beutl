@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.Diagnostics;
+using System.Reactive.Linq;
 
 using Reactive.Bindings;
 
@@ -20,6 +21,7 @@ public class Release
         Version = _response.Select(x => x.Version).ToReadOnlyReactivePropertySlim()!;
         Title = _response.Select(x => x.Title).ToReadOnlyReactivePropertySlim()!;
         Body = _response.Select(x => x.Body).ToReadOnlyReactivePropertySlim()!;
+        TargetVersion = _response.Select(x => x.Target_version).ToReadOnlyReactivePropertySlim()!;
         AssetId = _response.Select(x => x.Asset_id).ToReadOnlyReactivePropertySlim()!;
         IsPublic = _response.Select(x => x.Public).ToReadOnlyReactivePropertySlim()!;
     }
@@ -35,6 +37,8 @@ public class Release
     public IReadOnlyReactiveProperty<string?> Title { get; }
 
     public IReadOnlyReactiveProperty<string?> Body { get; }
+    
+    public IReadOnlyReactiveProperty<string?> TargetVersion { get; }
 
     public IReadOnlyReactiveProperty<long?> AssetId { get; }
 
@@ -44,18 +48,22 @@ public class Release
 
     public async Task RefreshAsync()
     {
+        using Activity? activity = _clients.ActivitySource.StartActivity("Release.Refresh", ActivityKind.Client);
+
         _response.Value = await _clients.Releases.GetReleaseAsync(Package.Name, _response.Value.Version);
 
         _isDeleted.Value = false;
     }
 
-    public Task UpdateAsync(long? assetId = null, string? body = null, bool? isPublic = null, string? title = null)
+    public Task UpdateAsync(long? assetId = null, string? body = null, bool? isPublic = null, string? title = null, string? targetVersion = null)
     {
-        return UpdateAsync(new UpdateReleaseRequest(assetId, body, isPublic, title));
+        return UpdateAsync(new UpdateReleaseRequest(assetId, body, isPublic, targetVersion, title));
     }
 
     public async Task UpdateAsync(UpdateReleaseRequest request)
     {
+        using Activity? activity = _clients.ActivitySource.StartActivity("Release.Update", ActivityKind.Client);
+
         if (_isDeleted.Value)
         {
             throw new InvalidOperationException("This object has been deleted.");
@@ -69,6 +77,8 @@ public class Release
 
     public async Task DeleteAsync()
     {
+        using Activity? activity = _clients.ActivitySource.StartActivity("Release.Delete", ActivityKind.Client);
+
         FileResponse response = await _clients.Releases.DeleteAsync(
             Package.Name,
             Response.Value.Version);
@@ -80,6 +90,8 @@ public class Release
 
     public async Task<Asset> GetAssetAsync()
     {
+        using Activity? activity = _clients.ActivitySource.StartActivity("Release.GetAsset", ActivityKind.Client);
+
         if (!AssetId.Value.HasValue)
             throw new InvalidOperationException("This release has no assets.");
 

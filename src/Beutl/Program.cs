@@ -1,25 +1,50 @@
-﻿using Avalonia;
+﻿using System.Runtime;
+
+using Avalonia;
 using Avalonia.Media;
 using Avalonia.ReactiveUI;
 
+using Beutl.Configuration;
 using Beutl.Rendering;
 using Beutl.Services;
-
-using Microsoft.Extensions.Logging;
-
-using Serilog;
 
 namespace Beutl;
 
 internal static class Program
 {
-    // Initialization code. Don't use any Avalonia, third-party APIs or any
-    // SynchronizationContext-reliant code before AppMain is called: things aren't initialized
-    // yet and stuff might break.
     [STAThread]
     public static void Main(string[] args)
     {
-        // STAThread属性がついている時に 'async Task Main' にするとDrag and Dropが動作しなくなる。
+        // Restore config
+        GlobalConfiguration config = GlobalConfiguration.Instance;
+        config.Restore(GlobalConfiguration.DefaultFilePath);
+
+        using IDisposable _ = Telemetry.GetDisposable();
+        Telemetry.Started();
+
+        // ProfileOptimizationを有効化
+        string jitProfiles = Path.Combine(BeutlEnvironment.GetHomeDirectoryPath(), "jitProfiles");
+        if (!Directory.Exists(jitProfiles))
+            Directory.CreateDirectory(jitProfiles);
+
+        ProfileOptimization.SetProfileRoot(jitProfiles);
+        ProfileOptimization.StartProfile("beutl.jitprofile");
+
+        WaitForExitOtherProcesses();
+
+        UnhandledExceptionHandler.Initialize();
+
+        RenderThread.Dispatcher.Dispatch(SharedGPUContext.Create, Threading.DispatchPriority.High);
+
+        BuildAvaloniaApp()
+            .StartWithClassicDesktopLifetime(args);
+
+        // 正常に終了した
+        UnhandledExceptionHandler.Exit();
+    }
+
+    private static void WaitForExitOtherProcesses()
+    {
         Process[] processes = Process.GetProcessesByName("Beutl.PackageTools");
         if (processes.Length > 0)
         {
@@ -27,9 +52,9 @@ internal static class Program
             {
                 ArgumentList =
                 {
-                    "--title", "Opening Beutl.",
-                    "--subtitle", "Changes to the package are in progress.",
-                    "--content", "To open Beutl, close Beutl.PackageTools.",
+                    "--title", Message.OpeningBeutl,
+                    "--subtitle", Message.Changes_to_the_package_are_in_progress,
+                    "--content", Message.To_open_Beutl_close_Beutl_PackageTools,
                     "--icon", "Info",
                     "--progress"
                 }
@@ -47,31 +72,10 @@ internal static class Program
 
             process?.Kill();
         }
-
-        SetupLogger();
-
-        UnhandledExceptionHandler.Initialize();
-
-        RenderThread.Dispatcher.Dispatch(SharedGPUContext.Create, Threading.DispatchPriority.High);
-
-        BuildAvaloniaApp()
-            .StartWithClassicDesktopLifetime(args);
-
-        // 正常に終了した
-        UnhandledExceptionHandler.Exit();
     }
 
-    // Avalonia configuration, don't remove; also used by visual designer.
     public static AppBuilder BuildAvaloniaApp()
     {
-#if DEBUG
-        GC.KeepAlive(typeof(Avalonia.Svg.Skia.SvgImageExtension).Assembly);
-        GC.KeepAlive(typeof(Avalonia.Svg.Skia.Svg).Assembly);
-        GC.KeepAlive(typeof(FluentIcons.FluentAvalonia.SymbolIcon).Assembly);
-        GC.KeepAlive(typeof(FluentIcons.Common.Symbol).Assembly);
-        GC.KeepAlive(typeof(AsyncImageLoader.ImageLoader).Assembly);
-#endif
-
         return AppBuilder.Configure<App>()
             .UsePlatformDetect()
             .UseReactiveUI()
@@ -83,24 +87,11 @@ internal static class Program
             {
                 DefaultFamilyName = Media.FontManager.Instance.DefaultTypeface.FontFamily.Name
             })
-            .LogToTrace();
-    }
-
-    private static void SetupLogger()
-    {
-        string logFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".beutl", "log", "log.txt");
-        const string OutputTemplate = "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] [{SourceContext:l}] {Message:lj}{NewLine}{Exception}";
-        Log.Logger = new LoggerConfiguration()
-            .Enrich.FromLogContext()
+            .AfterSetup(_ => Telemetry.CompressLogFiles())
 #if DEBUG
-            .MinimumLevel.Verbose()
-            .WriteTo.Debug(outputTemplate: OutputTemplate)
+            .LogToTrace();
 #else
-            .MinimumLevel.Debug()
+            ;
 #endif
-            .WriteTo.Async(b => b.File(logFile, outputTemplate: OutputTemplate, shared: true, rollingInterval: RollingInterval.Day))
-            .CreateLogger();
-
-        BeutlApplication.Current.LoggerFactory = LoggerFactory.Create(builder => builder.AddSerilog(Log.Logger, true));
     }
 }

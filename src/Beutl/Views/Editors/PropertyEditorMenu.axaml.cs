@@ -1,8 +1,8 @@
-﻿using Avalonia.Controls;
+﻿using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Interactivity;
 
 using Beutl.Animation;
-using Beutl.Extensibility;
 using Beutl.ProjectSystem;
 using Beutl.ViewModels;
 using Beutl.ViewModels.Editors;
@@ -17,12 +17,17 @@ public sealed partial class PropertyEditorMenu : UserControl
     public PropertyEditorMenu()
     {
         InitializeComponent();
+        Bind(ToolTip.TipProperty, this.GetObservable(DataContextProperty)
+            .Select(v => (v as BaseEditorViewModel)?.HasAnimation ?? Observable.Return(false))
+            .Switch()
+            .Select(v => v ? $"- {Message.RightClickToShowMenu}\n- {Message.AnimationIsEnabled}" : null));
     }
 
     protected override void OnDataContextChanged(EventArgs e)
     {
         base.OnDataContextChanged(e);
         toggleLivePreview.IsVisible = DataContext is IConfigureLivePreview;
+        uniformEditorToggle.IsVisible = DataContext is IConfigureUniformEditor;
     }
 
     private void Button_Click(object? sender, RoutedEventArgs e)
@@ -54,12 +59,7 @@ public sealed partial class PropertyEditorMenu : UserControl
             && viewModel.WrappedProperty is IAbstractAnimatableProperty animatableProperty
             && viewModel.GetService<EditViewModel>() is { } editViewModel)
         {
-            if (animatableProperty.Animation is not IKeyFrameAnimation
-                && animatableProperty.GetCoreProperty() is { } coreProp)
-            {
-                Type type = typeof(KeyFrameAnimation<>).MakeGenericType(animatableProperty.PropertyType);
-                animatableProperty.Animation = Activator.CreateInstance(type, coreProp) as IAnimation;
-            }
+            viewModel.PrepareToEditAnimation();
 
             // タイムラインのタブを開く
             var anmTimelineViewModel = new GraphEditorTabViewModel();
@@ -72,25 +72,31 @@ public sealed partial class PropertyEditorMenu : UserControl
         }
     }
 
+    private void RemoveAnimation_Click(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is BaseEditorViewModel viewModel
+            && viewModel.WrappedProperty is IAbstractAnimatableProperty { Animation: { } animation }
+            && viewModel.GetService<EditViewModel>() is { } editViewModel)
+        {
+            (editViewModel as ISupportCloseAnimation).Close(animation);
+            viewModel.RemoveAnimation();
+        }
+    }
+
     private void EditInlineAnimation_Click(object? sender, RoutedEventArgs e)
     {
         if (DataContext is BaseEditorViewModel viewModel
             && viewModel.WrappedProperty is IAbstractAnimatableProperty animatableProperty
             && viewModel.GetService<EditViewModel>() is { } editViewModel
-            && viewModel.GetService<Element>() is { } layer
+            && viewModel.GetService<Element>() is { } element
             && editViewModel.FindToolTab<TimelineViewModel>() is { } timeline)
         {
-            if (animatableProperty.Animation is not IKeyFrameAnimation
-                && animatableProperty.GetCoreProperty() is { } coreProp)
-            {
-                Type type = typeof(KeyFrameAnimation<>).MakeGenericType(animatableProperty.PropertyType);
-                animatableProperty.Animation = Activator.CreateInstance(type, coreProp) as IAnimation;
-            }
+            viewModel.PrepareToEditAnimation();
 
             if (animatableProperty.Animation is IKeyFrameAnimation)
             {
                 // タイムラインのタブを開く
-                timeline.AttachInline(animatableProperty, layer);
+                timeline.AttachInline(animatableProperty, element);
             }
         }
     }

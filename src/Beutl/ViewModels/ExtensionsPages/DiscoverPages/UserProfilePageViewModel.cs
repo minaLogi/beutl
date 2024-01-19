@@ -2,16 +2,18 @@
 
 using Beutl.Api.Objects;
 
+using OpenTelemetry.Trace;
+
 using Reactive.Bindings;
 
 using Serilog;
 
 namespace Beutl.ViewModels.ExtensionsPages.DiscoverPages;
 
-public sealed class UserProfilePageViewModel : BasePageViewModel
+public sealed class UserProfilePageViewModel : BasePageViewModel, ISupportRefreshViewModel
 {
     private readonly ILogger _logger = Log.ForContext<UserProfilePageViewModel>();
-    private readonly CompositeDisposable _disposables = new();
+    private readonly CompositeDisposable _disposables = [];
 
     public UserProfilePageViewModel(Profile profile)
     {
@@ -19,14 +21,25 @@ public sealed class UserProfilePageViewModel : BasePageViewModel
         Refresh = new AsyncReactiveCommand(IsBusy.Not())
             .WithSubscribe(async () =>
             {
+                using Activity? activity = Services.Telemetry.StartActivity("UserProfilePage.Refresh");
+
                 try
                 {
-                    IsBusy.Value = true;
-                    await Profile.RefreshAsync();
-                    await RefreshPackages();
+                    Packages.Clear();
+                    Packages.AddRange(Enumerable.Repeat(new DummyItem(), 6));
+
+                    using (await Profile.Lock.LockAsync())
+                    {
+                        activity?.AddEvent(new("Entered_AsyncLock"));
+                        IsBusy.Value = true;
+                        await Profile.RefreshAsync();
+                        await RefreshPackages();
+                    }
                 }
                 catch (Exception e)
                 {
+                    activity?.SetStatus(ActivityStatusCode.Error);
+                    activity?.RecordException(e);
                     ErrorHandle(e);
                     _logger.Error(e, "An unexpected error has occurred.");
                 }
@@ -45,7 +58,10 @@ public sealed class UserProfilePageViewModel : BasePageViewModel
                 try
                 {
                     IsBusy.Value = true;
-                    await MoreLoadPackages();
+                    using (await Profile.Lock.LockAsync())
+                    {
+                        await MoreLoadPackages();
+                    }
                 }
                 catch (Exception e)
                 {
@@ -92,7 +108,7 @@ public sealed class UserProfilePageViewModel : BasePageViewModel
 
     public IReadOnlyReactiveProperty<string?> Email { get; }
 
-    public AvaloniaList<Package?> Packages { get; } = new();
+    public AvaloniaList<object> Packages { get; } = [];
 
     public AsyncReactiveCommand Refresh { get; }
 
@@ -107,13 +123,13 @@ public sealed class UserProfilePageViewModel : BasePageViewModel
 
     private async Task RefreshPackages()
     {
-        Packages.Clear();
         Package[] array = await Profile.GetPackagesAsync(0, 30);
+        Packages.Clear();
         Packages.AddRange(array);
 
         if (array.Length == 30)
         {
-            Packages.Add(null);
+            Packages.Add(new LoadMoreItem());
         }
     }
 
@@ -125,7 +141,7 @@ public sealed class UserProfilePageViewModel : BasePageViewModel
 
         if (array.Length == 30)
         {
-            Packages.Add(null);
+            Packages.Add(new LoadMoreItem());
         }
     }
 }

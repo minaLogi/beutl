@@ -3,6 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Numerics;
 using System.Text.Json.Serialization;
+using System.Text.Unicode;
 
 using Beutl.Converters;
 using Beutl.Utilities;
@@ -12,12 +13,20 @@ namespace Beutl.Graphics;
 /// <summary>
 /// Defines a point that may be defined relative to a containing element.
 /// </summary>
+/// <remarks>
+/// Initializes a new instance of the <see cref="RelativePoint"/> struct.
+/// </remarks>
+/// <param name="point">The point.</param>
+/// <param name="unit">The unit.</param>
 [JsonConverter(typeof(RelativePointJsonConverter))]
 [TypeConverter(typeof(RelativePointConverter))]
-public readonly struct RelativePoint
+public readonly struct RelativePoint(Point point, RelativeUnit unit)
     : IEquatable<RelativePoint>,
       IParsable<RelativePoint>,
       ISpanParsable<RelativePoint>,
+      ISpanFormattable,
+      IUtf8SpanParsable<RelativePoint>,
+      IUtf8SpanFormattable,
       IEqualityOperators<RelativePoint, RelativePoint, bool>
 {
     /// <summary>
@@ -47,25 +56,14 @@ public readonly struct RelativePoint
     }
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="RelativePoint"/> struct.
-    /// </summary>
-    /// <param name="point">The point.</param>
-    /// <param name="unit">The unit.</param>
-    public RelativePoint(Point point, RelativeUnit unit)
-    {
-        Point = point;
-        Unit = unit;
-    }
-
-    /// <summary>
     /// Gets the point.
     /// </summary>
-    public Point Point { get; }
+    public Point Point { get; } = point;
 
     /// <summary>
     /// Gets the unit.
     /// </summary>
-    public RelativeUnit Unit { get; }
+    public RelativeUnit Unit { get; } = unit;
 
     /// <summary>
     /// Checks for equality between two <see cref="RelativePoint"/>s.
@@ -138,7 +136,7 @@ public readonly struct RelativePoint
     /// <returns>The status of the operation.</returns>
     public static bool TryParse(string s, out RelativePoint point)
     {
-        return TryParse(s.AsSpan(), out point);
+        return TryParse(s.AsSpan(), null, out point);
     }
 
     /// <summary>
@@ -149,16 +147,7 @@ public readonly struct RelativePoint
     /// <returns>The status of the operation.</returns>
     public static bool TryParse(ReadOnlySpan<char> s, out RelativePoint point)
     {
-        try
-        {
-            point = Parse(s);
-            return true;
-        }
-        catch
-        {
-            point = default;
-            return false;
-        }
+        return TryParse(s, null, out point);
     }
 
     /// <summary>
@@ -178,7 +167,34 @@ public readonly struct RelativePoint
     /// <returns>The parsed <see cref="RelativePoint"/>.</returns>
     public static RelativePoint Parse(ReadOnlySpan<char> s)
     {
-        using (var tokenizer = new RefStringTokenizer(s, CultureInfo.InvariantCulture, exceptionMessage: "Invalid RelativePoint."))
+        return Parse(s, null);
+    }
+
+    /// <summary>
+    /// Returns a String representing this RelativePoint instance.
+    /// </summary>
+    /// <returns>The string representation.</returns>
+    public override string ToString()
+    {
+        return Unit == RelativeUnit.Absolute ?
+            Point.ToString() :
+            FormattableString.Invariant($"{Point.X * 100}%, {Point.Y * 100}%");
+    }
+
+    public static RelativePoint Parse(string s, IFormatProvider? provider)
+    {
+        return Parse(s, provider);
+    }
+
+    public static bool TryParse([NotNullWhen(true)] string? s, IFormatProvider? provider, out RelativePoint result)
+    {
+        return TryParse(s.AsSpan(), provider, out result);
+    }
+
+    public static RelativePoint Parse(ReadOnlySpan<char> s, IFormatProvider? provider)
+    {
+        provider ??= CultureInfo.InvariantCulture;
+        using (var tokenizer = new RefStringTokenizer(s, provider, exceptionMessage: "Invalid RelativePoint."))
         {
             ReadOnlySpan<char> x = tokenizer.ReadString();
             ReadOnlySpan<char> y = tokenizer.ReadString();
@@ -200,41 +216,123 @@ public readonly struct RelativePoint
             }
 
             return new RelativePoint(
-                float.Parse(x, provider: CultureInfo.InvariantCulture) * scale,
-                float.Parse(y, provider: CultureInfo.InvariantCulture) * scale,
+                float.Parse(x, provider: provider) * scale,
+                float.Parse(y, provider: provider) * scale,
                 unit);
         }
     }
 
-    /// <summary>
-    /// Returns a String representing this RelativePoint instance.
-    /// </summary>
-    /// <returns>The string representation.</returns>
-    public override string ToString()
+    public static bool TryParse(ReadOnlySpan<char> s, IFormatProvider? provider, out RelativePoint result)
     {
-        return Unit == RelativeUnit.Absolute ?
-            Point.ToString() :
-            FormattableString.Invariant($"{Point.X * 100}%, {Point.Y * 100}%");
+        try
+        {
+            result = Parse(s, provider);
+            return true;
+        }
+        catch
+        {
+            result = default;
+            return false;
+        }
     }
 
-    static RelativePoint IParsable<RelativePoint>.Parse(string s, IFormatProvider? provider)
+    public bool TryFormat(Span<char> destination, out int charsWritten, ReadOnlySpan<char> format = default, IFormatProvider? provider = null)
     {
-        return Parse(s);
+        if (Unit == RelativeUnit.Absolute)
+        {
+            return Point.TryFormat(destination, out charsWritten, default, provider);
+        }
+        else
+        {
+            char separator = TokenizerHelper.GetSeparatorFromFormatProvider(provider);
+            return MemoryExtensions.TryWrite(destination, provider, $"{Point.X * 100}%{separator} {Point.Y * 100}%", out charsWritten);
+        }
     }
 
-    static bool IParsable<RelativePoint>.TryParse([NotNullWhen(true)] string? s, IFormatProvider? provider, [MaybeNullWhen(false)] out RelativePoint result)
+    public string ToString(IFormatProvider? formatProvider)
     {
-        result = default;
-        return s != null && TryParse(s, out result);
+        if (Unit == RelativeUnit.Absolute)
+        {
+            return Point.ToString(formatProvider);
+        }
+        else
+        {
+            char separator = TokenizerHelper.GetSeparatorFromFormatProvider(formatProvider);
+            return string.Create(formatProvider, $"{Point.X * 100}%{separator} {Point.Y * 100}%");
+        }
     }
 
-    static RelativePoint ISpanParsable<RelativePoint>.Parse(ReadOnlySpan<char> s, IFormatProvider? provider)
+    public string ToString(string? format, IFormatProvider? formatProvider)
     {
-        return Parse(s);
+        return ToString(formatProvider);
     }
 
-    static bool ISpanParsable<RelativePoint>.TryParse([NotNullWhen(true)] ReadOnlySpan<char> s, IFormatProvider? provider, [MaybeNullWhen(false)] out RelativePoint result)
+    public static RelativePoint Parse(ReadOnlySpan<byte> utf8Text)
     {
-        return TryParse(s, out result);
+        return Parse(utf8Text, null);
+    }
+
+    public static RelativePoint Parse(ReadOnlySpan<byte> utf8Text, IFormatProvider? provider)
+    {
+        provider ??= CultureInfo.InvariantCulture;
+        using (var tokenizer = new RefUtf8StringTokenizer(utf8Text, provider, exceptionMessage: "Invalid RelativePoint."))
+        {
+            ReadOnlySpan<byte> x = tokenizer.ReadString();
+            ReadOnlySpan<byte> y = tokenizer.ReadString();
+
+            RelativeUnit unit = RelativeUnit.Absolute;
+            float scale = 1.0f;
+
+            ReadOnlySpan<byte> percentChar = "%"u8;
+            if (x.EndsWith(percentChar))
+            {
+                if (!y.EndsWith(percentChar))
+                {
+                    throw new FormatException("If one coordinate is relative, both must be.");
+                }
+
+                x = x[..^1];
+                y = y[..^1];
+                unit = RelativeUnit.Relative;
+                scale = 0.01f;
+            }
+
+            return new RelativePoint(
+                float.Parse(x, provider: provider) * scale,
+                float.Parse(y, provider: provider) * scale,
+                unit);
+        }
+    }
+
+    public static bool TryParse(ReadOnlySpan<byte> utf8Text, out RelativePoint result)
+    {
+        return TryParse(utf8Text, null, out result);
+    }
+
+    public static bool TryParse(ReadOnlySpan<byte> utf8Text, IFormatProvider? provider, out RelativePoint result)
+    {
+        try
+        {
+            result = Parse(utf8Text, provider);
+            return true;
+        }
+        catch
+        {
+            result = default;
+            return false;
+        }
+    }
+
+    public bool TryFormat(Span<byte> utf8Destination, out int bytesWritten, ReadOnlySpan<char> format = default, IFormatProvider? provider = null)
+    {
+        if (Unit == RelativeUnit.Absolute)
+        {
+            return Point.TryFormat(utf8Destination, out bytesWritten, default, provider);
+        }
+        else
+        {
+            char separator = TokenizerHelper.GetSeparatorFromFormatProvider(provider);
+            return Utf8.TryWrite(utf8Destination, provider, $"{Point.X * 100}%{separator} {Point.Y * 100}%", out bytesWritten);
+        }
     }
 }

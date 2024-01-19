@@ -10,31 +10,13 @@ namespace Beutl.Media;
 
 [JsonConverter(typeof(FontFamilyJsonConverter))]
 [TypeConverter(typeof(FontFamilyConverter))]
-public class FontFamily : IEquatable<FontFamily?>
+public class FontFamily(string familyname) : IEquatable<FontFamily?>
 {
     public static readonly FontFamily Default = new(GetDefaultFontFamily());
 
-    public FontFamily(string familyname)
-    {
-        Name = familyname;
-    }
+    public string Name { get; } = familyname;
 
-    public string Name { get; }
-
-    public IEnumerable<Typeface> Typefaces
-    {
-        get
-        {
-            if (FontManager.Instance._fonts.TryGetValue(this, out TypefaceCollection? value))
-            {
-                return value.Keys;
-            }
-            else
-            {
-                return Enumerable.Empty<Typeface>();
-            }
-        }
-    }
+    public IEnumerable<Typeface> Typefaces => FontManager.Instance.GetTypefaces(this);
 
     public override bool Equals(object? obj)
     {

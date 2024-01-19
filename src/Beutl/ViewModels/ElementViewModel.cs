@@ -6,10 +6,13 @@ using Avalonia.Input;
 using Avalonia.Input.Platform;
 
 using Beutl.Commands;
+using Beutl.Helpers;
 using Beutl.Models;
 using Beutl.ProjectSystem;
 using Beutl.Services;
 using Beutl.Utilities;
+
+using FluentAvalonia.UI.Media;
 
 using Reactive.Bindings;
 using Reactive.Bindings.Extensions;
@@ -20,7 +23,8 @@ namespace Beutl.ViewModels;
 
 public sealed class ElementViewModel : IDisposable
 {
-    private readonly CompositeDisposable _disposables = new();
+    private readonly CompositeDisposable _disposables = [];
+    private List<KeyBinding>? _keyBindings;
 
     public ElementViewModel(Element element, TimelineViewModel timeline)
     {
@@ -65,13 +69,20 @@ public sealed class ElementViewModel : IDisposable
             .ToReactiveProperty()
             .AddTo(_disposables);
 
-        TextColor = Color.Select(GetTextColor)
+        RestBorderColor = Color.Select(v => (Avalonia.Media.Color)((Color2)v).LightenPercent(-0.15f))
+            .ToReadOnlyReactivePropertySlim()!;
+
+        TextColor = Color.Select(ColorGenerator.GetTextColor)
             .ToReadOnlyReactivePropertySlim()
             .AddTo(_disposables);
 
         // コマンドを構成
-        Split.Where(func => func != null)
-            .Subscribe(func => OnSplit(func!()))
+        Split.Where(_ => GetClickedTime != null)
+            .Subscribe(_ => OnSplit(GetClickedTime!()))
+            .AddTo(_disposables);
+
+        SplitByCurrentFrame
+            .Subscribe(_ => OnSplit(Scene.CurrentFrame))
             .AddTo(_disposables);
 
         Cut.Subscribe(OnCut)
@@ -97,6 +108,9 @@ public sealed class ElementViewModel : IDisposable
         BringAnimationToTop.Subscribe(OnBringAnimationToTop)
             .AddTo(_disposables);
 
+        ChangeToOriginalLength.Subscribe(OnChangeToOriginalLength)
+            .AddTo(_disposables);
+
         // ZIndexが変更されたら、LayerHeaderのカウントを増減して、新しいLayerHeaderを設定する。
         zIndexSubject.Subscribe(number =>
             {
@@ -111,7 +125,7 @@ public sealed class ElementViewModel : IDisposable
             })
             .AddTo(_disposables);
 
-        KeyBindings = CreateKeyBinding();
+        Scope = new ElementScopeViewModel(Model, this);
     }
 
     ~ElementViewModel()
@@ -121,9 +135,13 @@ public sealed class ElementViewModel : IDisposable
 
     public Func<(Thickness Margin, Thickness BorderMargin, double Width), CancellationToken, Task> AnimationRequested { get; set; } = (_, _) => Task.CompletedTask;
 
+    public Func<TimeSpan>? GetClickedTime { get; set; }
+
     public TimelineViewModel Timeline { get; private set; }
 
     public Element Model { get; private set; }
+
+    public ElementScopeViewModel Scope { get; private set; }
 
     public Scene Scene => (Scene)Model.HierarchicalParent!;
 
@@ -145,9 +163,13 @@ public sealed class ElementViewModel : IDisposable
 
     public ReactiveProperty<Avalonia.Media.Color> Color { get; }
 
+    public ReadOnlyReactivePropertySlim<Avalonia.Media.Color> RestBorderColor { get; }
+
     public ReadOnlyReactivePropertySlim<Avalonia.Media.Color> TextColor { get; }
 
-    public ReactiveCommand<Func<TimeSpan>?> Split { get; } = new();
+    public ReactiveCommand Split { get; } = new();
+
+    public ReactiveCommand SplitByCurrentFrame { get; } = new();
 
     public AsyncReactiveCommand Cut { get; } = new();
 
@@ -161,28 +183,34 @@ public sealed class ElementViewModel : IDisposable
 
     public ReactiveCommand BringAnimationToTop { get; } = new();
 
-    public List<KeyBinding> KeyBindings { get; }
+    public ReactiveCommand ChangeToOriginalLength { get; } = new();
+
+    public List<KeyBinding> KeyBindings => _keyBindings ??= CreateKeyBinding();
 
     public void Dispose()
     {
         _disposables.Dispose();
         LayerHeader.Dispose();
+        Scope.Dispose();
 
         LayerHeader.Value = null!;
         Timeline = null!;
         Model = null!;
+        Scope = null!;
         AnimationRequested = (_, _) => Task.CompletedTask;
+        GetClickedTime = null;
         GC.SuppressFinalize(this);
     }
 
     public async void AnimationRequest(int layerNum, bool affectModel = true, CancellationToken cancellationToken = default)
     {
         var inlines = Timeline.Inlines
-            .Where(x => x.Layer == this)
+            .Where(x => x.Element == this)
             .Select(x => (ViewModel: x, Context: x.PrepareAnimation()))
             .ToArray();
+        var scope = Scope.PrepareAnimation();
 
-        var newMargin = new Thickness(0, Timeline.CalculateLayerTop(layerNum), 0, 0);
+        Thickness newMargin = new(0, Timeline.CalculateLayerTop(layerNum), 0, 0);
         Thickness oldMargin = Margin.Value;
         if (affectModel)
             Model.ZIndex = layerNum;
@@ -192,7 +220,10 @@ public sealed class ElementViewModel : IDisposable
         foreach (var (item, context) in inlines)
             item.AnimationRequest(context, newMargin, BorderMargin.Value, cancellationToken);
 
-        await AnimationRequested((newMargin, BorderMargin.Value, Width.Value), cancellationToken);
+        Task task1 = Scope.AnimationRequest(scope, cancellationToken);
+        Task task2 = AnimationRequested((newMargin, BorderMargin.Value, Width.Value), cancellationToken);
+
+        await Task.WhenAll(task1, task2);
         Margin.Value = newMargin;
     }
 
@@ -211,7 +242,10 @@ public sealed class ElementViewModel : IDisposable
             item.AnimationRequest(inlineContext, margin, borderMargin, cancellationToken);
         }
 
-        await AnimationRequested((margin, borderMargin, width), cancellationToken);
+        Task task1 = Scope.AnimationRequest(context.Scope, cancellationToken);
+        Task task2 = AnimationRequested((margin, borderMargin, width), cancellationToken);
+
+        await Task.WhenAll(task1, task2);
         BorderMargin.Value = borderMargin;
         Margin.Value = margin;
         Width.Value = width;
@@ -260,9 +294,10 @@ public sealed class ElementViewModel : IDisposable
             BorderMargin: BorderMargin.Value,
             Width: Width.Value,
             Inlines: Timeline.Inlines
-                .Where(x => x.Layer == this)
+                .Where(x => x.Element == this)
                 .Select(x => (ViewModel: x, Context: x.PrepareAnimation()))
-                .ToArray());
+                .ToArray(),
+            Scope: Scope.PrepareAnimation());
     }
 
     private void OnDelete()
@@ -280,7 +315,7 @@ public sealed class ElementViewModel : IDisposable
     {
         if (LayerHeader.Value is { } layerHeader)
         {
-            InlineAnimationLayerViewModel[] inlines = Timeline.Inlines.Where(x => x.Layer == this).ToArray();
+            InlineAnimationLayerViewModel[] inlines = Timeline.Inlines.Where(x => x.Element == this).ToArray();
             Array.Sort(inlines, (x, y) => x.Index.Value - y.Index.Value);
 
             for (int i = 0; i < inlines.Length; i++)
@@ -297,7 +332,7 @@ public sealed class ElementViewModel : IDisposable
 
     private void OnFinishEditingAnimation()
     {
-        foreach (InlineAnimationLayerViewModel item in Timeline.Inlines.Where(x => x.Layer == this).ToArray())
+        foreach (InlineAnimationLayerViewModel item in Timeline.Inlines.Where(x => x.Element == this).ToArray())
         {
             Timeline.DetachInline(item);
         }
@@ -314,29 +349,69 @@ public sealed class ElementViewModel : IDisposable
     private void OnSplit(TimeSpan timeSpan)
     {
         int rate = Scene.FindHierarchicalParent<Project>() is { } proj ? proj.GetFrameRate() : 30;
+        TimeSpan minLength = TimeSpan.FromSeconds(1d / rate);
         TimeSpan absTime = timeSpan.RoundToRate(rate);
         TimeSpan forwardLength = absTime - Model.Start;
         TimeSpan backwardLength = Model.Length - forwardLength;
 
-        CoreObjectReborn.Reborn(Model, out Element backwardLayer);
+        if (forwardLength < minLength || backwardLength < minLength)
+            return;
 
-        Scene.MoveChild(Model.ZIndex, Model.Start, forwardLength, Model).DoAndRecord(CommandRecorder.Default);
-        backwardLayer.Start = absTime;
-        backwardLayer.Length = backwardLength;
+        CoreObjectReborn.Reborn(Model, out Element backward);
 
-        backwardLayer.Save(RandomFileNameGenerator.Generate(Path.GetDirectoryName(Scene.FileName)!, Constants.ElementFileExtension));
-        Scene.AddChild(backwardLayer).DoAndRecord(CommandRecorder.Default);
+        IRecordableCommand command1 = Scene.MoveChild(Model.ZIndex, Model.Start, forwardLength, Model);
+        backward.Start = absTime;
+        backward.Length = backwardLength;
+
+        backward.Save(RandomFileNameGenerator.Generate(Path.GetDirectoryName(Scene.FileName)!, Constants.ElementFileExtension));
+        IRecordableCommand command2 = Scene.AddChild(backward);
+        IRecordableCommand command3 = backward.Operation.OnSplit(true, forwardLength, -forwardLength);
+        IRecordableCommand command4 = Model.Operation.OnSplit(false, TimeSpan.Zero, -backwardLength);
+
+        command1.Append(command2)
+            .Append(command3)
+            .Append(command4)
+            .DoAndRecord(CommandRecorder.Default);
+    }
+
+    private async void OnChangeToOriginalLength()
+    {
+        if (!Model.UseNode
+            && Model.Operation.Children.FirstOrDefault(v => v.HasOriginalLength()) is { } op
+            && op.TryGetOriginalLength(out TimeSpan timeSpan))
+        {
+            PrepareAnimationContext context = PrepareAnimation();
+
+            int rate = Scene.FindHierarchicalParent<Project>() is { } proj ? proj.GetFrameRate() : 30;
+            TimeSpan length = timeSpan.FloorToRate(rate);
+
+            Element? after = Model.GetAfter(Model.ZIndex, Model.Range.End);
+            if (after != null)
+            {
+                TimeSpan delta = after.Start - Model.Start;
+                if (delta < length)
+                {
+                    length = delta;
+                }
+            }
+
+            Scene.MoveChild(Model.ZIndex, Model.Start, length, Model)
+                .DoAndRecord(CommandRecorder.Default);
+
+            await AnimationRequest(context);
+        }
     }
 
     private List<KeyBinding> CreateKeyBinding()
     {
         PlatformHotkeyConfiguration? config = Application.Current?.PlatformSettings?.HotkeyConfiguration;
         KeyModifiers modifier = config?.CommandModifiers ?? KeyModifiers.Control;
-        var list = new List<KeyBinding>
-        {
+        List<KeyBinding> list =
+        [
             new KeyBinding { Gesture = new(Key.Delete), Command = Exclude },
-            new KeyBinding { Gesture = new(Key.Delete, modifier), Command = Delete }
-        };
+            new KeyBinding { Gesture = new(Key.Delete, modifier), Command = Delete },
+            new KeyBinding { Gesture = new(Key.K, modifier), Command = SplitByCurrentFrame }
+        ];
 
         if (config != null)
         {
@@ -352,57 +427,15 @@ public sealed class ElementViewModel : IDisposable
         return list;
     }
 
-    // https://github.com/google/skia/blob/0d39172f35d259b6ab888974177bc4e6d839d44c/src/effects/SkHighContrastFilter.cpp
-    private Avalonia.Media.Color GetTextColor(Avalonia.Media.Color color)
+    public bool HasOriginalLength()
     {
-        static Vector3 Mix(Vector3 x, Vector3 y, float a)
-        {
-            return (x * (1 - a)) + (y * a);
-        }
-
-        static Vector3 Saturate(Vector3 a)
-        {
-            return Vector3.Clamp(a, new(0), new(1));
-        }
-
-        static Avalonia.Media.Color ToColor(Vector3 vector)
-        {
-            return new(255, (byte)(vector.X * 255), (byte)(vector.Y * 255), (byte)(vector.Z * 255));
-        }
-
-        static Vector3 ToVector3(Avalonia.Media.Color color)
-        {
-            return new Vector3(color.R / 255f, color.G / 255f, color.B / 255f);
-        }
-
-        // 計算機イプシロン
-        // 'float.Epsilon'は使わないで
-        const float Epsilon = MathUtilities.FloatEpsilon;
-        float contrast = 1.0f;
-        contrast = Math.Max(-1.0f + Epsilon, Math.Min(contrast, +1.0f - Epsilon));
-
-        contrast = (1.0f + contrast) / (1.0f - contrast);
-
-        Vector3 c = ToVector3(color);
-        float grayscale = Vector3.Dot(new(0.2126f, 0.7152f, 0.0722f), c);
-        c = new Vector3(grayscale);
-
-        // brightness
-        //c = Vector3.One - c;
-
-        //lightness
-        HslColor hsl = ToColor(c).ToHsl();
-        c = ToVector3(HslColor.ToRgb(hsl.H, hsl.S, 1 - hsl.L, hsl.A));
-
-        c = Mix(new Vector3(0.5f), c, contrast);
-        c = Saturate(c);
-
-        return ToColor(c);
+        return !Model.UseNode && Model.Operation.Children.Any(v => v.HasOriginalLength());
     }
 
     public record struct PrepareAnimationContext(
         Thickness Margin,
         Thickness BorderMargin,
         double Width,
-        (InlineAnimationLayerViewModel ViewModel, InlineAnimationLayerViewModel.PrepareAnimationContext Context)[] Inlines);
+        (InlineAnimationLayerViewModel ViewModel, InlineAnimationLayerViewModel.PrepareAnimationContext Context)[] Inlines,
+        ElementScopeViewModel.PrepareAnimationContext Scope);
 }

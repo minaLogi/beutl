@@ -2,21 +2,28 @@
 using System.Text.Json.Nodes;
 
 using Avalonia;
+using Avalonia.Animation;
+using Avalonia.Animation.Easings;
 using Avalonia.Controls;
-using Avalonia.Data;
-using Avalonia.Data.Converters;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
+using Avalonia.Platform.Storage;
+using Avalonia.Styling;
 using Avalonia.Threading;
 
+using Beutl.Helpers;
 using Beutl.Media;
+using Beutl.Media.Pixel;
+using Beutl.Media.Source;
 using Beutl.Models;
+using Beutl.Operators.Source;
 using Beutl.ProjectSystem;
+using Beutl.Serialization;
 using Beutl.Services;
 using Beutl.ViewModels;
-using Beutl.ViewModels.Tools;
 using Beutl.ViewModels.Dialogs;
+using Beutl.ViewModels.Tools;
 using Beutl.Views.Dialogs;
 
 using FluentAvalonia.UI.Controls;
@@ -35,9 +42,10 @@ public sealed partial class Timeline : UserControl
     internal MouseFlags _mouseFlag = MouseFlags.Free;
     internal TimeSpan _pointerFrame;
     private TimelineViewModel? _viewModel;
-    private readonly CompositeDisposable _disposables = new();
-    private ElementView? _selectedLayer;
-    private readonly List<(ElementViewModel Layer, bool IsSelectedOriginal)> _rangeSelection = new();
+    private readonly CompositeDisposable _disposables = [];
+    private ElementView? _selectedElement;
+    private readonly List<(ElementViewModel Element, bool IsSelectedOriginal)> _rangeSelection = [];
+    private CancellationTokenSource? _scrollCts;
 
     public Timeline()
     {
@@ -75,7 +83,7 @@ public sealed partial class Timeline : UserControl
         _viewModel = null;
 
         TimelinePanel.Children.RemoveRange(2, TimelinePanel.Children.Count - 2);
-        _selectedLayer = null;
+        _selectedElement = null;
         _rangeSelection.Clear();
 
         _disposables.Clear();
@@ -85,64 +93,162 @@ public sealed partial class Timeline : UserControl
     {
         _viewModel = vm;
 
-        vm.Layers.ForEachItem(
+        TimelinePanel.Children.AddRange(vm.Elements.SelectMany(e =>
+        {
+            return new Control[]
+            {
+                new ElementView
+                {
+                    DataContext = e
+                },
+                new ElementScopeView
+                {
+                    DataContext = e.Scope
+                }
+            };
+        }));
+
+        TimelinePanel.Children.AddRange(vm.Inlines.Select(e => new InlineAnimationLayer
+        {
+            DataContext = e
+        }));
+
+        vm.Elements.TrackCollectionChanged(
             AddElement,
             RemoveElement,
             () => { })
             .DisposeWith(_disposables);
 
-        vm.Inlines.ForEachItem(
+        vm.Inlines.TrackCollectionChanged(
             OnAddedInline,
             OnRemovedInline,
             () => { })
             .DisposeWith(_disposables);
 
-        ViewModel.Paste.Subscribe(async () =>
-            {
-                if (TopLevel.GetTopLevel(this) is { Clipboard: IClipboard clipboard })
-                {
-                    string[] formats = await clipboard.GetFormatsAsync();
+        ViewModel.Paste.Subscribe(PasteCore)
+            .DisposeWith(_disposables);
 
-                    if (formats.AsSpan().Contains(Constants.Element))
-                    {
-                        string? json = await clipboard.GetTextAsync();
-                        if (json != null)
-                        {
-                            var oldElement = new Element();
-                            oldElement.ReadFromJson(JsonNode.Parse(json)!.AsObject());
-                            CoreObjectReborn.Reborn(oldElement, out Element newElement);
-
-                            newElement.Start = ViewModel.ClickedFrame;
-                            newElement.ZIndex = ViewModel.CalculateClickedLayer();
-
-                            newElement.Save(RandomFileNameGenerator.Generate(Path.GetDirectoryName(ViewModel.Scene.FileName)!, Constants.ElementFileExtension));
-
-                            ViewModel.Scene.AddChild(newElement).DoAndRecord(CommandRecorder.Default);
-                        }
-                    }
-                }
-            })
+        ViewModel.ScrollTo.Subscribe(v => ScrollTimelinePosition(v.Range, v.ZIndex))
             .DisposeWith(_disposables);
 
         ViewModel.EditorContext.SelectedObject.Subscribe(e =>
             {
-                if (_selectedLayer != null)
+                if (_selectedElement != null)
                 {
-                    foreach (ElementViewModel item in ViewModel.Layers.GetMarshal().Value)
+                    foreach (ElementViewModel item in ViewModel.Elements.GetMarshal().Value)
                     {
                         item.IsSelected.Value = false;
                     }
 
-                    _selectedLayer = null;
+                    _selectedElement = null;
                 }
 
-                if (e is Element layer && FindLayerView(layer) is ElementView { DataContext: ElementViewModel viewModel } newView)
+                if (e is Element element && FindElementView(element) is ElementView { DataContext: ElementViewModel viewModel } newView)
                 {
                     viewModel.IsSelected.Value = true;
-                    _selectedLayer = newView;
+                    _selectedElement = newView;
                 }
             })
             .DisposeWith(_disposables);
+    }
+
+    private async void PasteCore()
+    {
+        try
+        {
+            if (TopLevel.GetTopLevel(this) is { Clipboard: IClipboard clipboard })
+            {
+                string[] formats = await clipboard.GetFormatsAsync();
+
+                if (formats.Contains(Constants.Element))
+                {
+                    string? json = await clipboard.GetTextAsync();
+                    if (json != null)
+                    {
+                        var oldElement = new Element();
+
+                        var context = new JsonSerializationContext(
+                            oldElement.GetType(), NullSerializationErrorNotifier.Instance, json: JsonNode.Parse(json)!.AsObject());
+                        using (ThreadLocalSerializationContext.Enter(context))
+                        {
+                            oldElement.Deserialize(context);
+                        }
+
+                        CoreObjectReborn.Reborn(oldElement, out Element newElement);
+
+                        newElement.Start = ViewModel.ClickedFrame;
+                        newElement.ZIndex = ViewModel.CalculateClickedLayer();
+
+                        newElement.Save(RandomFileNameGenerator.Generate(Path.GetDirectoryName(ViewModel.Scene.FileName)!, Constants.ElementFileExtension));
+
+                        ViewModel.Scene.AddChild(newElement).DoAndRecord(CommandRecorder.Default);
+
+                        ScrollTimelinePosition(newElement.Range, newElement.ZIndex);
+                    }
+                }
+                else
+                {
+                    string[] imageFormats = ["image/png", "PNG", "image/jpeg", "image/jpg"];
+
+                    if (Array.Find(imageFormats, i => formats.Contains(i)) is { } matchFormat)
+                    {
+                        object? imageData = await clipboard.GetDataAsync(matchFormat);
+                        Stream? stream = null;
+                        if (imageData is byte[] byteArray)
+                            stream = new MemoryStream(byteArray);
+                        else if (imageData is Stream st)
+                            stream = st;
+
+                        if (stream?.CanRead != true)
+                        {
+                            NotificationService.ShowWarning(
+                                "タイムライン",
+                                $"この画像データはペーストできません\nFormats: [{string.Join(", ", formats)}]");
+                        }
+                        else
+                        {
+                            string dir = Path.GetDirectoryName(ViewModel.Scene.FileName)!;
+                            // 画像を保存
+                            string resDir = Path.Combine(dir, "resources");
+                            if (!Directory.Exists(resDir))
+                            {
+                                Directory.CreateDirectory(resDir);
+                            }
+                            string imageFile = RandomFileNameGenerator.Generate(resDir, "png");
+                            using (var bmp = Bitmap<Bgra8888>.FromStream(stream))
+                            {
+                                bmp.Save(imageFile, Graphics.EncodedImageFormat.Png);
+                            }
+
+                            var sp = new SourceImageOperator
+                            {
+                                Source = { Value = BitmapSource.Open(imageFile) }
+                            };
+                            var newElement = new Element
+                            {
+                                Start = ViewModel.ClickedFrame,
+                                Length = TimeSpan.FromSeconds(5),
+                                ZIndex = ViewModel.CalculateClickedLayer(),
+                                Operation = { Children = { sp } },
+                                AccentColor = ColorGenerator.GenerateColor(typeof(SourceImageOperator).FullName!),
+                                Name = Path.GetFileName(imageFile)
+                            };
+
+                            newElement.Save(RandomFileNameGenerator.Generate(dir, Constants.ElementFileExtension));
+
+                            ViewModel.Scene.AddChild(newElement).DoAndRecord(CommandRecorder.Default);
+
+                            ScrollTimelinePosition(newElement.Range, newElement.ZIndex);
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Telemetry.Exception(ex);
+            NotificationService.ShowError(Message.AnUnexpectedErrorHasOccurred, ex.Message);
+        }
     }
 
     protected override void OnLoaded(RoutedEventArgs e)
@@ -255,8 +361,14 @@ public sealed partial class Timeline : UserControl
     {
         TimelineViewModel viewModel = ViewModel;
         PointerPoint pointerPt = e.GetCurrentPoint(TimelinePanel);
-        _pointerFrame = pointerPt.Position.X.ToTimeSpan(viewModel.Options.Value.Scale)
-            .RoundToRate(viewModel.Scene.FindHierarchicalParent<Project>() is { } proj ? proj.GetFrameRate() : 30);
+        int rate = viewModel.Scene.FindHierarchicalParent<Project>().GetFrameRate();
+        _pointerFrame = pointerPt.Position.X.ToTimeSpan(viewModel.Options.Value.Scale).RoundToRate(rate);
+
+        if (_pointerFrame >= viewModel.Scene.Duration)
+        {
+            _pointerFrame = viewModel.Scene.Duration - TimeSpan.FromSeconds(1d / rate);
+            _pointerFrame = _pointerFrame.RoundToRate(rate);
+        }
 
         if (_mouseFlag == MouseFlags.SeekBarPressed)
         {
@@ -290,9 +402,9 @@ public sealed partial class Timeline : UserControl
     private void UpdateRangeSelection()
     {
         TimelineViewModel viewModel = ViewModel;
-        foreach ((ElementViewModel layer, bool isSelectedOriginal) in _rangeSelection)
+        foreach ((ElementViewModel element, bool isSelectedOriginal) in _rangeSelection)
         {
-            layer.IsSelected.Value = isSelectedOriginal;
+            element.IsSelected.Value = isSelectedOriginal;
         }
 
         _rangeSelection.Clear();
@@ -304,7 +416,7 @@ public sealed partial class Timeline : UserControl
         int startLayer = viewModel.ToLayerNumber(rect.Top);
         int endLayer = viewModel.ToLayerNumber(rect.Bottom);
 
-        foreach (ElementViewModel item in viewModel.Layers)
+        foreach (ElementViewModel item in viewModel.Elements)
         {
             if (timeRange.Intersects(item.Model.Range)
                 && startLayer <= item.Model.ZIndex && item.Model.ZIndex <= endLayer)
@@ -378,9 +490,17 @@ public sealed partial class Timeline : UserControl
             }
             else
             {
-                viewModel.AddLayer.Execute(new ElementDescription(
+                viewModel.AddElement.Execute(new ElementDescription(
                     viewModel.ClickedFrame, TimeSpan.FromSeconds(5), viewModel.CalculateClickedLayer(), InitialOperator: type));
             }
+        }
+        else if (e.Data.GetFiles()
+            ?.Where(v => v is IStorageFile)
+            ?.Select(v => v.TryGetLocalPath())
+            .FirstOrDefault(v => v != null) is { } fileName)
+        {
+            viewModel.AddElement.Execute(new ElementDescription(
+                viewModel.ClickedFrame, TimeSpan.FromSeconds(5), viewModel.CalculateClickedLayer(), FileName: fileName));
         }
     }
 
@@ -429,8 +549,13 @@ public sealed partial class Timeline : UserControl
         {
             DataContext = viewModel
         };
+        var scopeView = new ElementScopeView
+        {
+            DataContext = viewModel.Scope
+        };
 
         TimelinePanel.Children.Add(view);
+        TimelinePanel.Children.Add(scopeView);
     }
 
     // 要素を削除
@@ -438,13 +563,13 @@ public sealed partial class Timeline : UserControl
     {
         Element elm = viewModel.Model;
 
-        for (int i = 0; i < TimelinePanel.Children.Count; i++)
+        for (int i = TimelinePanel.Children.Count - 1; i >= 0; i--)
         {
             Control item = TimelinePanel.Children[i];
-            if (item.DataContext is ElementViewModel vm && vm.Model == elm)
+            if ((item.DataContext is ElementViewModel vm1 && vm1.Model == elm)
+                || (item.DataContext is ElementScopeViewModel vm2 && vm2.Model == elm))
             {
                 TimelinePanel.Children.RemoveAt(i);
-                break;
             }
         }
     }
@@ -473,9 +598,9 @@ public sealed partial class Timeline : UserControl
         }
     }
 
-    private ElementView? FindLayerView(Element layer)
+    private ElementView? FindElementView(Element element)
     {
-        return TimelinePanel.Children.FirstOrDefault(ctr => ctr.DataContext is ElementViewModel vm && vm.Model == layer) as ElementView;
+        return TimelinePanel.Children.FirstOrDefault(ctr => ctr.DataContext is ElementViewModel vm && vm.Model == element) as ElementView;
     }
 
     private void ZoomClick(object? sender, RoutedEventArgs e)
@@ -505,6 +630,74 @@ public sealed partial class Timeline : UserControl
             {
                 Scale = zoom,
             };
+        }
+    }
+
+    private async void ScrollTimelinePosition(TimeRange range, int zindex)
+    {
+        if (DataContext is TimelineViewModel viewModel)
+        {
+            const double Spacing = 40;
+
+            float scale = viewModel.Options.Value.Scale;
+            Size viewport = ContentScroll.Viewport - new Size(Spacing * 2, 0);
+            Avalonia.Vector offset = ContentScroll.Offset + new Avalonia.Vector(Spacing, 0);
+
+            var start = offset.X.ToTimeSpan(scale);
+            var length = viewport.Width.ToTimeSpan(scale);
+            int startZIndex = viewModel.ToLayerNumber(offset.Y);
+            int endZIndex = viewModel.ToLayerNumber(offset.Y + viewport.Height);
+
+            double newOffsetX = ContentScroll.Offset.X;
+            double newOffsetY = ContentScroll.Offset.Y;
+
+            if (!range.Intersects(new TimeRange(start, length)))
+            {
+                newOffsetX = range.Start.ToPixel(scale) - Spacing;
+            }
+
+            if (!(startZIndex <= zindex && zindex <= endZIndex))
+            {
+                newOffsetY = viewModel.CalculateLayerTop(zindex);
+            }
+
+            _scrollCts?.Cancel();
+            _scrollCts = new CancellationTokenSource();
+            var anm = new Avalonia.Animation.Animation
+            {
+                Easing = new SplineEasing(0.1, 0.9, 0.2, 1.0),
+                Duration = TimeSpan.FromSeconds(0.5),
+                FillMode = FillMode.None,
+                Children =
+                {
+                    new KeyFrame()
+                    {
+                        Cue = new Cue(0),
+                        Setters =
+                        {
+                            new Setter(ScrollViewer.OffsetProperty, ContentScroll.Offset),
+                        }
+                    },
+                    new KeyFrame()
+                    {
+                        Cue = new Cue(1),
+                        Setters =
+                        {
+                            new Setter(ScrollViewer.OffsetProperty, new Avalonia.Vector(newOffsetX, newOffsetY)),
+                        }
+                    }
+                }
+            };
+            await anm.RunAsync(ContentScroll, _scrollCts.Token);
+            ContentScroll.ClearValue(ScrollViewer.OffsetProperty);
+            ContentScroll.Offset = new Avalonia.Vector(newOffsetX, newOffsetY);
+            if (!_scrollCts.IsCancellationRequested)
+            {
+                viewModel.Options.Value = viewModel.Options.Value with
+                {
+                    Offset = new Vector2((float)newOffsetX, (float)newOffsetY)
+                };
+            }
         }
     }
 }

@@ -4,7 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
 
-using Beutl.Extensibility;
+using Beutl.ViewModels.Editors;
 
 namespace Beutl.Views.Editors;
 
@@ -12,6 +12,7 @@ public partial class FilterEffectListItemEditor : UserControl, IListItemEditor
 {
     private static readonly CrossFade s_transition = new(TimeSpan.FromMilliseconds(167));
     private CancellationTokenSource? _lastTransitionCts;
+    private UnknownObjectView? _unknownObjectView;
 
     public FilterEffectListItemEditor()
     {
@@ -31,6 +32,18 @@ public partial class FilterEffectListItemEditor : UserControl, IListItemEditor
                 {
                     await s_transition.Start(content, null, localToken);
                 }
+            });
+
+        this.GetObservable(DataContextProperty)
+            .Select(x => x as FilterEffectEditorViewModel)
+            .Select(x => x?.IsDummy.Select(_ => x) ?? Observable.Return<FilterEffectEditorViewModel?>(null))
+            .Switch()
+            .Where(v => v?.IsDummy.Value == true)
+            .Take(1)
+            .Subscribe(_ =>
+            {
+                _unknownObjectView = new UnknownObjectView();
+                content.Children.Add(_unknownObjectView);
             });
     }
 

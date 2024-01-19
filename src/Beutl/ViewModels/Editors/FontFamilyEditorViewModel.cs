@@ -5,26 +5,21 @@ using Beutl.Media;
 
 namespace Beutl.ViewModels.Editors;
 
-public sealed class FontFamilyEditorViewModel : ValueEditorViewModel<FontFamily>
+public sealed class FontFamilyEditorViewModel(IAbstractProperty<FontFamily?> property) : ValueEditorViewModel<FontFamily?>(property)
 {
-    public FontFamilyEditorViewModel(IAbstractProperty<FontFamily> property)
-        : base(property)
-    {
-    }
-
     public override void Accept(IPropertyEditorContextVisitor visitor)
     {
         base.Accept(visitor);
         if (visitor is FontFamilyEditor editor)
         {
             editor[!FontFamilyEditor.ValueProperty] = Value.ToBinding();
-            editor.ValueChanged += OnValueChanged;
+            editor.ValueConfirmed += OnValueConfirmed;
         }
     }
 
-    private void OnValueChanged(object? sender, PropertyEditorValueChangedEventArgs e)
+    private void OnValueConfirmed(object? sender, PropertyEditorValueChangedEventArgs e)
     {
-        if (e is PropertyEditorValueChangedEventArgs<FontFamily> args)
+        if (e is PropertyEditorValueChangedEventArgs<FontFamily?> args)
         {
             SetValue(args.OldValue, args.NewValue);
         }

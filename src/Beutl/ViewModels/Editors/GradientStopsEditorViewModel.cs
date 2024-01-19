@@ -18,7 +18,7 @@ public class GradientStopsEditorViewModel : BaseEditorViewModel<GradientStops>
         GradientStops? initValue = property.GetValue();
         if (initValue == null)
         {
-            property.SetValue(initValue = new GradientStops());
+            property.SetValue(initValue = []);
         }
 
         Value = property.GetObservable()
@@ -38,7 +38,7 @@ public class GradientStopsEditorViewModel : BaseEditorViewModel<GradientStops>
 
     public ReadOnlyReactivePropertySlim<GradientStops> Value { get; }
 
-    public AM.GradientStops Stops { get; } = new();
+    public AM.GradientStops Stops { get; } = [];
 
     public ReactivePropertySlim<AM.GradientStop?> SelectedItem { get; } = new();
 
@@ -71,9 +71,26 @@ public class GradientStopsEditorViewModel : BaseEditorViewModel<GradientStops>
             }
 
             if (!MathUtilities.AreClose(model.Offset, oldOffset2))
-            //if (model.Offset != oldOffset2)
             {
                 var tmp = new ChangePropertyCommand<float>(model, GradientStop.OffsetProperty, newOffset, oldOffset2);
+                command = command == null ? tmp : command.Append(tmp);
+            }
+
+            GradientStop? prev = index > 0 ? Value.Value[index - 1] : null;
+            GradientStop? next = index + 1 < Value.Value.Count ? Value.Value[index + 1] : null;
+
+            if (prev != null && model.Offset < prev.Offset)
+            {
+                IRecordableCommand tmp = Value.Value.BeginRecord<GradientStop>()
+                    .Move(index, index - 1)
+                    .ToCommand();
+                command = command == null ? tmp : command.Append(tmp);
+            }
+            else if (next != null && next.Offset < model.Offset)
+            {
+                IRecordableCommand tmp = Value.Value.BeginRecord<GradientStop>()
+                    .Move(index, index + 1)
+                    .ToCommand();
                 command = command == null ? tmp : command.Append(tmp);
             }
 

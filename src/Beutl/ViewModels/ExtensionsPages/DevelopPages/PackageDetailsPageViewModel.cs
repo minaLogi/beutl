@@ -1,15 +1,17 @@
 ﻿using Beutl.Api.Objects;
 
+using OpenTelemetry.Trace;
+
 using Reactive.Bindings;
 
 using Serilog;
 
 namespace Beutl.ViewModels.ExtensionsPages.DevelopPages;
 
-public sealed class PackageDetailsPageViewModel : BasePageViewModel
+public sealed class PackageDetailsPageViewModel : BasePageViewModel, ISupportRefreshViewModel
 {
     private readonly ILogger _logger = Log.ForContext<PackageDetailsPageViewModel>();
-    private readonly CompositeDisposable _disposables = new();
+    private readonly CompositeDisposable _disposables = [];
     private readonly AuthorizedUser _user;
 
     public PackageDetailsPageViewModel(AuthorizedUser user, Package package)
@@ -22,16 +24,25 @@ public sealed class PackageDetailsPageViewModel : BasePageViewModel
             if (IsBusy.Value)
                 return;
 
+            using Activity? activity = Services.Telemetry.StartActivity("PackageDetailsPage.Refresh");
+
             try
             {
-                IsBusy.Value = true;
+                using (await _user.Lock.LockAsync())
+                {
+                    activity?.AddEvent(new("Entered_AsyncLock"));
 
-                await _user.RefreshAsync();
+                    IsBusy.Value = true;
 
-                await Package.RefreshAsync();
+                    await _user.RefreshAsync();
+
+                    await Package.RefreshAsync();
+                }
             }
             catch (Exception ex)
             {
+                activity?.SetStatus(ActivityStatusCode.Error);
+                activity?.RecordException(ex);
                 ErrorHandle(ex);
                 _logger.Error(ex, "An unexpected error has occurred.");
             }

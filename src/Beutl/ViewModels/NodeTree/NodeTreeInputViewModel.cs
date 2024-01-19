@@ -9,15 +9,15 @@ namespace Beutl.ViewModels.NodeTree;
 
 public sealed class NodeTreeInputViewModel : IDisposable, IServiceProvider
 {
-    private readonly CompositeDisposable _disposables = new();
+    private readonly CompositeDisposable _disposables = [];
     private NodeTreeInputTabViewModel _parent;
 
-    public NodeTreeInputViewModel(Element layer, NodeTreeInputTabViewModel parent)
+    public NodeTreeInputViewModel(Element element, NodeTreeInputTabViewModel parent)
     {
-        Model = layer;
+        Model = element;
         _parent = parent;
 
-        UseNode = layer.GetObservable(Element.UseNodeProperty)
+        UseNode = element.GetObservable(Element.UseNodeProperty)
             .ToReactiveProperty()
             .DisposeWith(_disposables);
 
@@ -26,7 +26,7 @@ public sealed class NodeTreeInputViewModel : IDisposable, IServiceProvider
                                 .DoAndRecord(CommandRecorder.Default))
             .DisposeWith(_disposables);
 
-        layer.NodeTree.Nodes.ForEachItem(
+        element.NodeTree.Nodes.ForEachItem(
             (originalIdx, item) =>
             {
                 if (item is LayerInputNode layerInput)
@@ -70,7 +70,7 @@ public sealed class NodeTreeInputViewModel : IDisposable, IServiceProvider
 
     public ReactiveProperty<bool> UseNode { get; }
 
-    public CoreList<NodeInputViewModel> Items { get; } = new();
+    public CoreList<NodeInputViewModel> Items { get; } = [];
 
     // NodesのIndexから、ItemsのIndexに変換。
     public int ConvertFromOriginalIndex(int originalIndex)

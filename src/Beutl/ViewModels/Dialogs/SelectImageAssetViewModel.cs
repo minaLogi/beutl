@@ -4,6 +4,8 @@ using Avalonia.Platform.Storage;
 using Beutl.Api.Objects;
 using Beutl.Services;
 
+using OpenTelemetry.Trace;
+
 using Reactive.Bindings;
 
 using Serilog;
@@ -26,26 +28,32 @@ public class SelectImageAssetViewModel
 
         Refresh.Subscribe(async () =>
         {
+            using Activity? activity = Telemetry.StartActivity("SelectImageAsset.Refresh");
             try
             {
                 IsBusy.Value = true;
-                await _user.RefreshAsync();
-
-                Items.Clear();
-
-                int prevCount = 0;
-                int count = 0;
-
-                do
+                using (await _user.Lock.LockAsync())
                 {
-                    Asset[] items = await user.Profile.GetAssetsAsync(count, 30);
-                    Items.AddRange(items.Where(x => ToKnownType(x.ContentType) == KnownType.Image));
-                    prevCount = items.Length;
-                    count += items.Length;
-                } while (prevCount == 30);
+                    await _user.RefreshAsync();
+
+                    Items.Clear();
+
+                    int prevCount = 0;
+                    int count = 0;
+
+                    do
+                    {
+                        Asset[] items = await user.Profile.GetAssetsAsync(count, 30);
+                        Items.AddRange(items.Where(x => ToKnownType(x.ContentType) == KnownType.Image));
+                        prevCount = items.Length;
+                        count += items.Length;
+                    } while (prevCount == 30);
+                }
             }
-            catch(Exception ex)
+            catch (Exception ex)
             {
+                activity?.SetStatus(ActivityStatusCode.Error);
+                activity?.RecordException(ex);
                 _logger.Error(ex, "An exception occurred while loading the asset.");
                 NotificationService.ShowError(Message.An_exception_occurred_while_loading_the_asset, ex.Message);
             }
@@ -58,7 +66,7 @@ public class SelectImageAssetViewModel
         Refresh.Execute();
     }
 
-    public AvaloniaList<Asset> Items { get; } = new();
+    public AvaloniaList<Asset> Items { get; } = [];
 
     public ReactivePropertySlim<Asset?> SelectedItem { get; } = new();
 

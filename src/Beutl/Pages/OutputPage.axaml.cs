@@ -17,18 +17,15 @@ public partial class OutputPage : UserControl
     {
         InitializeComponent();
         contentControl.ContentTemplate = s_sharedDataTemplate;
+    }
 
-        this.GetObservable(IsVisibleProperty)
-            .Where(b => b)
-            .SkipUntil(this.GetObservable(DataContextProperty).Where(x => x is OutputPageViewModel))
-            .Take(1)
-            .Subscribe(_ =>
-            {
-                if (DataContext is OutputPageViewModel viewModel)
-                {
-                    viewModel.Restore();
-                }
-            });
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        if (DataContext is OutputPageViewModel viewModel)
+        {
+            viewModel.Restore();
+        }
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
@@ -68,7 +65,7 @@ public partial class OutputPage : UserControl
 
     private sealed class _DataTemplate : IDataTemplate
     {
-        private readonly Dictionary<OutputExtension, Control> _contextToViewType = new();
+        private readonly Dictionary<OutputExtension, Control> _contextToViewType = [];
 
         public Control? Build(object? param)
         {
