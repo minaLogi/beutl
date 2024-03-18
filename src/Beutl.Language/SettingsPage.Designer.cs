@@ -214,6 +214,42 @@ namespace Beutl.Language {
         }
         
         /// <summary>
+        ///   Enable auto save に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string EnableAutoSave {
+            get {
+                return ResourceManager.GetString("EnableAutoSave", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   The file is automatically saved after the operation is performed. に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string EnableAutoSave_Description {
+            get {
+                return ResourceManager.GetString("EnableAutoSave_Description", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Enable frame cache に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string EnableFrameCache {
+            get {
+                return ResourceManager.GetString("EnableFrameCache", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Enable node cache に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string EnableNodeCache {
+            get {
+                return ResourceManager.GetString("EnableNodeCache", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   Enable pointer lock に類似しているローカライズされた文字列を検索します。
         /// </summary>
         public static string EnablePointerLockInProperty {
@@ -237,6 +273,78 @@ namespace Beutl.Language {
         public static string FontFiles {
             get {
                 return ResourceManager.GetString("FontFiles", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Color space に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string FrameCacheColorType {
+            get {
+                return ResourceManager.GetString("FrameCacheColorType", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Maximum bytes に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string FrameCacheMaxSize {
+            get {
+                return ResourceManager.GetString("FrameCacheMaxSize", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   The number of caches will be adjusted so that it does not exceed this number of bytes. に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string FrameCacheMaxSize_Description {
+            get {
+                return ResourceManager.GetString("FrameCacheMaxSize_Description", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Scale に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string FrameCacheScale {
+            get {
+                return ResourceManager.GetString("FrameCacheScale", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Fit to preview screen に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string FrameCacheScale_FitToPreviewer {
+            get {
+                return ResourceManager.GetString("FrameCacheScale_FitToPreviewer", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Half に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string FrameCacheScale_Half {
+            get {
+                return ResourceManager.GetString("FrameCacheScale_Half", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Original に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string FrameCacheScale_Original {
+            get {
+                return ResourceManager.GetString("FrameCacheScale_Original", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Quarter に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string FrameCacheScale_Quarter {
+            get {
+                return ResourceManager.GetString("FrameCacheScale_Quarter", resourceCulture);
             }
         }
         
@@ -304,6 +412,33 @@ namespace Beutl.Language {
         }
         
         /// <summary>
+        ///   Node Cache に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string NodeCache {
+            get {
+                return ResourceManager.GetString("NodeCache", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Maximum pixels に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string NodeCacheMaxPixels {
+            get {
+                return ResourceManager.GetString("NodeCacheMaxPixels", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Minimum pixels に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string NodeCacheMinPixels {
+            get {
+                return ResourceManager.GetString("NodeCacheMinPixels", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   OpenGL Version に類似しているローカライズされた文字列を検索します。
         /// </summary>
         public static string OpenGLVersion {
@@ -327,6 +462,15 @@ namespace Beutl.Language {
         public static string PrimaryProperties {
             get {
                 return ResourceManager.GetString("PrimaryProperties", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Property editor に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string PropertyEditor {
+            get {
+                return ResourceManager.GetString("PropertyEditor", resourceCulture);
             }
         }
         
@@ -440,15 +584,6 @@ namespace Beutl.Language {
         }
         
         /// <summary>
-        ///   All Errors に類似しているローカライズされた文字列を検索します。
-        /// </summary>
-        public static string Telemetry_All_Errors {
-            get {
-                return ResourceManager.GetString("Telemetry_All_Errors", resourceCulture);
-            }
-        }
-        
-        /// <summary>
         ///   APIクライアント に類似しているローカライズされた文字列を検索します。
         /// </summary>
         public static string Telemetry_Beutl_Api_Client {
@@ -485,30 +620,13 @@ namespace Beutl.Language {
         }
         
         /// <summary>
-        ///   Display and operation に類似しているローカライズされた文字列を検索します。
-        /// </summary>
-        public static string Telemetry_Beutl_ViewTracking {
-            get {
-                return ResourceManager.GetString("Telemetry_Beutl_ViewTracking", resourceCulture);
-            }
-        }
-        
-        /// <summary>
         ///   To improve Beutl, we collect anonymous usage data.
+        ///These settings will be applied after the application is restarted.
         ///For more information, please refer to the following pages. に類似しているローカライズされた文字列を検索します。
         /// </summary>
         public static string Telemetry_Description {
             get {
                 return ResourceManager.GetString("Telemetry_Description", resourceCulture);
-            }
-        }
-        
-        /// <summary>
-        ///   Collect all errors that occur. に類似しているローカライズされた文字列を検索します。
-        /// </summary>
-        public static string Telemetry_Description_All_Errors {
-            get {
-                return ResourceManager.GetString("Telemetry_Description_All_Errors", resourceCulture);
             }
         }
         
@@ -550,15 +668,6 @@ namespace Beutl.Language {
         }
         
         /// <summary>
-        ///   Collect what features users view or use. に類似しているローカライズされた文字列を検索します。
-        /// </summary>
-        public static string Telemetry_Description_Beutl_ViewTracking {
-            get {
-                return ResourceManager.GetString("Telemetry_Description_Beutl_ViewTracking", resourceCulture);
-            }
-        }
-        
-        /// <summary>
         ///   Settings about the data to be collected に類似しているローカライズされた文字列を検索します。
         /// </summary>
         public static string Telemetry_ShortDescription {
@@ -591,6 +700,15 @@ namespace Beutl.Language {
         public static string Theme_Tip {
             get {
                 return ResourceManager.GetString("Theme_Tip", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   These settings will be applied after the application is restarted. に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string TheseSettingsWillBeAppliedAfterTheApplicationIsRestarted {
+            get {
+                return ResourceManager.GetString("TheseSettingsWillBeAppliedAfterTheApplicationIsRestarted", resourceCulture);
             }
         }
         

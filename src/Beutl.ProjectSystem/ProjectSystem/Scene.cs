@@ -1,16 +1,16 @@
-﻿using System.Collections.Specialized;
-using System.ComponentModel;
+﻿using System.Collections.Immutable;
+using System.Collections.Specialized;
 using System.ComponentModel.DataAnnotations;
 using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 using Beutl.Configuration;
 using Beutl.Language;
 using Beutl.Media;
-using Beutl.Rendering;
 using Beutl.Rendering.Cache;
 using Beutl.Serialization;
+using Beutl.Utilities;
 
 using Microsoft.Extensions.FileSystemGlobbing;
 using Microsoft.Extensions.FileSystemGlobbing.Abstractions;
@@ -42,24 +42,16 @@ public enum ElementOverlapHandling
     Allow = 1 << 3
 }
 
-public class Scene : ProjectItem
+public class Scene : ProjectItem, IAffectsRender
 {
-    public static readonly CoreProperty<int> WidthProperty;
-    public static readonly CoreProperty<int> HeightProperty;
+    public static readonly CoreProperty<PixelSize> FrameSizeProperty;
     public static readonly CoreProperty<Elements> ChildrenProperty;
     public static readonly CoreProperty<TimeSpan> DurationProperty;
-    public static readonly CoreProperty<TimeSpan> CurrentFrameProperty;
-    public static readonly CoreProperty<IRenderer> RendererProperty;
-    public static readonly CoreProperty<IComposer> ComposerProperty;
-    public static readonly CoreProperty<RenderCacheOptions> CacheOptionsProperty;
     private readonly List<string> _includeElements = ["**/*.belm"];
     private readonly List<string> _excludeElements = [];
     private readonly Elements _children;
     private TimeSpan _duration = TimeSpan.FromMinutes(5);
-    private TimeSpan _currentFrame;
-    private IRenderer _renderer;
-    private IComposer _composer;
-    private RenderCacheOptions _cacheOptions = RenderCacheOptions.Default;
+    private PixelSize _frameSize;
 
     public Scene()
         : this(1920, 1080, string.Empty)
@@ -68,20 +60,18 @@ public class Scene : ProjectItem
 
     public Scene(int width, int height, string name)
     {
+        FrameSize = new PixelSize(width, height);
         _children = new Elements(this);
         _children.CollectionChanged += Children_CollectionChanged;
-        Initialize(width, height);
+        _children.Attached += item => item.Invalidated += OnElementInvalidated;
+        _children.Detached += item => item.Invalidated -= OnElementInvalidated;
         Name = name;
     }
 
     static Scene()
     {
-        WidthProperty = ConfigureProperty<int, Scene>(nameof(Width))
-            .Accessor(o => o.Width)
-            .Register();
-
-        HeightProperty = ConfigureProperty<int, Scene>(nameof(Height))
-            .Accessor(o => o.Height)
+        FrameSizeProperty = ConfigureProperty<PixelSize, Scene>(nameof(FrameSize))
+            .Accessor(o => o.FrameSize, (o, v) => o.FrameSize = v)
             .Register();
 
         ChildrenProperty = ConfigureProperty<Elements, Scene>(nameof(Children))
@@ -91,28 +81,15 @@ public class Scene : ProjectItem
         DurationProperty = ConfigureProperty<TimeSpan, Scene>(nameof(Duration))
             .Accessor(o => o.Duration, (o, v) => o.Duration = v)
             .Register();
-
-        CurrentFrameProperty = ConfigureProperty<TimeSpan, Scene>(nameof(CurrentFrame))
-            .Accessor(o => o.CurrentFrame, (o, v) => o.CurrentFrame = v)
-            .Register();
-
-        RendererProperty = ConfigureProperty<IRenderer, Scene>(nameof(Renderer))
-            .Accessor(o => o.Renderer, (o, v) => o.Renderer = v)
-            .Register();
-
-        ComposerProperty = ConfigureProperty<IComposer, Scene>(nameof(Composer))
-            .Accessor(o => o.Composer, (o, v) => o.Composer = v)
-            .Register();
-
-        CacheOptionsProperty = ConfigureProperty<RenderCacheOptions, Scene>(nameof(CacheOptions))
-            .Accessor(o => o.CacheOptions, (o, v) => o.CacheOptions = v)
-            .DefaultValue(RenderCacheOptions.Default)
-            .Register();
     }
 
-    public int Width => Renderer.RenderScene.Size.Width;
+    public event EventHandler<RenderInvalidatedEventArgs>? Invalidated;
 
-    public int Height => Renderer.RenderScene.Size.Height;
+    public PixelSize FrameSize
+    {
+        get => _frameSize;
+        set => SetAndRaise(FrameSizeProperty, ref _frameSize, value);
+    }
 
     [Display(Name = nameof(Strings.DurationTime), ResourceType = typeof(Strings))]
     public TimeSpan Duration
@@ -127,82 +104,11 @@ public class Scene : ProjectItem
         }
     }
 
-    public TimeSpan CurrentFrame
-    {
-        get => _currentFrame;
-        set
-        {
-            if (value < TimeSpan.Zero)
-                value = TimeSpan.Zero;
-            if (value > Duration)
-                value = Duration;
-
-            SetAndRaise(CurrentFrameProperty, ref _currentFrame, value);
-        }
-    }
-
     [NotAutoSerialized]
     public Elements Children
     {
         get => _children;
         set => _children.Replace(value);
-    }
-
-    [NotAutoSerialized]
-    public IRenderer Renderer
-    {
-        get => _renderer;
-        private set => SetAndRaise(RendererProperty, ref _renderer, value);
-    }
-
-    [NotAutoSerialized]
-    public IComposer Composer
-    {
-        get => _composer;
-        private set => SetAndRaise(ComposerProperty, ref _composer, value);
-    }
-
-    public RenderCacheOptions CacheOptions
-    {
-        get => _cacheOptions;
-        set => SetAndRaise(CacheOptionsProperty, ref _cacheOptions, value);
-    }
-
-    [MemberNotNull(nameof(_renderer), nameof(_composer))]
-    public void Initialize(int width, int height)
-    {
-        PixelSize oldSize = _renderer?.RenderScene?.Size ?? PixelSize.Empty;
-        var newSize = new PixelSize(width, height);
-        if (oldSize != newSize || _renderer == null)
-        {
-            _renderer?.Dispose();
-            Renderer = new SceneRenderer(this, width, height);
-            _renderer = Renderer;
-
-            if (_renderer.GetCacheContext() is { } cacheContext)
-            {
-                cacheContext.CacheOptions = CacheOptions;
-            }
-        }
-
-        OnPropertyChanged(new CorePropertyChangedEventArgs<int>(
-            sender: this,
-            property: WidthProperty,
-            metadata: WidthProperty.GetMetadata<Scene, CorePropertyMetadata>(),
-            newValue: width,
-            oldValue: oldSize.Width));
-
-        OnPropertyChanged(new CorePropertyChangedEventArgs<int>(
-            sender: this,
-            property: HeightProperty,
-            metadata: HeightProperty.GetMetadata<Scene, CorePropertyMetadata>(),
-            newValue: height,
-            oldValue: oldSize.Height));
-
-        if (_composer == null || _composer.IsDisposed)
-        {
-            _composer = new SceneComposer(this);
-        }
     }
 
     // element.FileNameが既に設定されている状態
@@ -211,6 +117,13 @@ public class Scene : ProjectItem
         ArgumentNullException.ThrowIfNull(element);
 
         return new AddCommand(this, element, overlapHandling);
+    }
+
+    public IRecordableCommand DeleteChild(Element element)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+
+        return new DeleteCommand(this, element);
     }
 
     public IRecordableCommand RemoveChild(Element element)
@@ -250,112 +163,6 @@ public class Scene : ProjectItem
         return new MultipleMoveCommand(this, elements, deltaIndex, deltaStart);
     }
 
-    [ObsoleteSerializationApi]
-    public override void ReadFromJson(JsonObject json)
-    {
-        static void Process(Func<string, Matcher> add, JsonNode node, List<string> list)
-        {
-            list.Clear();
-            if (node is JsonValue jvalue &&
-                jvalue.TryGetValue(out string? pattern))
-            {
-                list.Add(pattern);
-                add(pattern);
-            }
-            else if (node is JsonArray array)
-            {
-                foreach (JsonValue item in array.OfType<JsonValue>())
-                {
-                    if (item.TryGetValue(out pattern))
-                    {
-                        list.Add(pattern);
-                        add(pattern);
-                    }
-                }
-            }
-        }
-
-        base.ReadFromJson(json);
-
-        if (json.TryGetPropertyValue(nameof(Width), out JsonNode? widthNode)
-            && json.TryGetPropertyValue(nameof(Height), out JsonNode? heightNode)
-            && widthNode != null
-            && heightNode != null
-            && widthNode.AsValue().TryGetValue(out int width)
-            && heightNode.AsValue().TryGetValue(out int height))
-        {
-            Initialize(width, height);
-        }
-
-        if (json.TryGetPropertyValue(nameof(Elements), out JsonNode? elementsNode)
-            && elementsNode is JsonObject elementsJson)
-        {
-            var matcher = new Matcher();
-            var directory = new DirectoryInfoWrapper(new DirectoryInfo(Path.GetDirectoryName(FileName)!));
-
-            // 含めるクリップ
-            if (elementsJson.TryGetPropertyValue("Include", out JsonNode? includeNode))
-            {
-                Process(matcher.AddInclude, includeNode!, _includeElements);
-            }
-
-            // 除外するクリップ
-            if (elementsJson.TryGetPropertyValue("Exclude", out JsonNode? excludeNode))
-            {
-                Process(matcher.AddExclude, excludeNode!, _excludeElements);
-            }
-
-            PatternMatchingResult result = matcher.Execute(directory);
-            SyncronizeFiles(result.Files.Select(x => x.Path));
-        }
-        else
-        {
-            Children.Clear();
-        }
-    }
-
-    [ObsoleteSerializationApi]
-    public override void WriteToJson(JsonObject json)
-    {
-        static void Process(JsonObject jobject, string jsonName, List<string> list)
-        {
-            if (list.Count == 1)
-            {
-                jobject[jsonName] = JsonValue.Create(list[0]);
-            }
-            else if (list.Count >= 2)
-            {
-                var jarray = new JsonArray();
-                foreach (string item in list)
-                {
-                    jarray.Add(JsonValue.Create(item));
-                }
-
-                jobject[jsonName] = jarray;
-            }
-            else
-            {
-                jobject.Remove(jsonName);
-            }
-        }
-
-        base.WriteToJson(json);
-        if (_renderer != null)
-        {
-            json[nameof(Width)] = _renderer.RenderScene.Size.Width;
-            json[nameof(Height)] = _renderer.RenderScene.Size.Height;
-        }
-
-        var elementsNode = new JsonObject();
-
-        UpdateInclude();
-
-        Process(elementsNode, "Include", _includeElements);
-        Process(elementsNode, "Exclude", _excludeElements);
-
-        json["Elements"] = elementsNode;
-    }
-
     public override void Serialize(ICoreSerializationContext context)
     {
         base.Serialize(context);
@@ -381,11 +188,8 @@ public class Scene : ProjectItem
             }
         }
 
-        if (_renderer != null)
-        {
-            context.SetValue(nameof(Width), _renderer.RenderScene.Size.Width);
-            context.SetValue(nameof(Height), _renderer.RenderScene.Size.Height);
-        }
+        context.SetValue("Width", FrameSize.Width);
+        context.SetValue("Height", FrameSize.Height);
 
         var elementsNode = new JsonObject();
 
@@ -423,11 +227,9 @@ public class Scene : ProjectItem
             }
         }
 
-        Optional<int> width = context.GetValue<Optional<int>>(nameof(Width));
-        Optional<int> height = context.GetValue<Optional<int>>(nameof(Height));
-        if (width.HasValue && height.HasValue)
+        if (context.Contains("Width") && context.Contains("Height"))
         {
-            Initialize(width.Value, height.Value);
+            FrameSize = new PixelSize(context.GetValue<int>("Width"), context.GetValue<int>("Height"));
         }
 
         if (context.GetValue<JsonObject>(nameof(Elements)) is JsonObject elementsJson)
@@ -471,22 +273,6 @@ public class Scene : ProjectItem
     protected override void RestoreCore(string filename)
     {
         this.JsonRestore2(filename);
-    }
-
-    protected override void OnPropertyChanged(PropertyChangedEventArgs args)
-    {
-        base.OnPropertyChanged(args);
-        if (args.PropertyName is nameof(CurrentFrame))
-        {
-            _renderer.RaiseInvalidated(CurrentFrame);
-        }
-        else if (args.PropertyName is nameof(CacheOptions))
-        {
-            if (_renderer.GetCacheContext() is { } cacheContext)
-            {
-                cacheContext.CacheOptions = CacheOptions;
-            }
-        }
     }
 
     private void SyncronizeFiles(IEnumerable<string> pathToElement)
@@ -542,7 +328,9 @@ public class Scene : ProjectItem
 
     private void Children_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        bool shouldRender = false;
+        ImmutableArray<TimeRange>.Builder affectedRange
+            = ImmutableArray.CreateBuilder<TimeRange>(Math.Max(e.OldItems?.Count ?? 0, e.NewItems?.Count ?? 0));
+
         if (e.Action == NotifyCollectionChangedAction.Remove
             && e.OldItems != null)
         {
@@ -556,22 +344,35 @@ public class Scene : ProjectItem
                     _excludeElements.Add(rel);
                 }
 
-                if (item.Range.Contains(CurrentFrame))
-                    shouldRender = true;
+                affectedRange.Add(item.Range);
             }
         }
         else if (e.Action == NotifyCollectionChangedAction.Add
             && e.NewItems != null)
         {
+            string dirPath = Path.GetDirectoryName(FileName)!;
             foreach (Element item in e.NewItems.OfType<Element>())
             {
-                if (item.Range.Contains(CurrentFrame))
-                    shouldRender = true;
+                string rel = Path.GetRelativePath(dirPath, item.FileName).Replace('\\', '/');
+
+                if (_excludeElements.Contains(rel) && File.Exists(item.FileName))
+                {
+                    _excludeElements.Remove(rel);
+                }
+
+                affectedRange.Add(item.Range);
             }
         }
 
-        if (shouldRender && Renderer is { IsDisposed: false })
-            Renderer.RaiseInvalidated(CurrentFrame);
+        Invalidated?.Invoke(this, new TimelineInvalidatedEventArgs(Children)
+        {
+            AffectedRange = affectedRange.DrainToImmutable()
+        });
+    }
+
+    private void OnElementInvalidated(object? sender, RenderInvalidatedEventArgs e)
+    {
+        Invalidated?.Invoke(this, e);
     }
 
     private int NearestLayerNumber(Element element)
@@ -766,6 +567,8 @@ public class Scene : ProjectItem
         private int _zIndex;
         private TimeRange _range;
 
+        public ImmutableArray<IStorable?> GetStorables() => [scene, element];
+
         public void Do()
         {
             (_range, _zIndex) = scene.GetCorrectPosition(element, overlapHandling);
@@ -800,6 +603,8 @@ public class Scene : ProjectItem
     {
         private int _zIndex;
 
+        public ImmutableArray<IStorable?> GetStorables() => [scene, element];
+
         public void Do()
         {
             _zIndex = element.ZIndex;
@@ -819,16 +624,94 @@ public class Scene : ProjectItem
         }
     }
 
+    private sealed class DeleteCommand : IRecordableCommand, IAffectsTimelineCommand
+    {
+        private readonly Scene _scene;
+        private readonly TimeRange _timeRange;
+        private readonly byte[] _jsonBytes;
+        private string _fileName;
+        private Element? _element;
+
+        public DeleteCommand(Scene scene, Element element)
+        {
+            _scene = scene;
+            _element = element;
+            _fileName = element.FileName;
+            _timeRange = element.Range;
+
+            var jsonObject = new JsonObject();
+            var context = new JsonSerializationContext(typeof(Element), NullSerializationErrorNotifier.Instance, json: jsonObject);
+            using (ThreadLocalSerializationContext.Enter(context))
+            {
+                element.Serialize(context);
+            }
+
+            _jsonBytes = JsonSerializer.SerializeToUtf8Bytes(jsonObject);
+        }
+
+        public ImmutableArray<IStorable?> GetStorables() => [_scene];
+
+        public ImmutableArray<TimeRange> GetAffectedRange() => [_timeRange];
+
+        public void Do()
+        {
+            if (_element != null)
+            {
+                string fileName = _element.FileName;
+                if (File.Exists(fileName))
+                {
+                    File.Delete(fileName);
+                }
+
+                _scene.Children.Remove(_element);
+                _element = null;
+            }
+        }
+
+        public void Redo()
+        {
+            Do();
+        }
+
+        public void Undo()
+        {
+            if (File.Exists(_fileName))
+            {
+                _fileName = RandomFileNameGenerator.Generate(Path.GetDirectoryName(_scene.FileName)!, "belm");
+            }
+
+            _element = new Element();
+
+            JsonObject? jsonObject = JsonSerializer.Deserialize<JsonObject>(_jsonBytes);
+            var context = new JsonSerializationContext(typeof(Element), NullSerializationErrorNotifier.Instance, json: jsonObject);
+            using (ThreadLocalSerializationContext.Enter(context))
+            {
+                _element.Deserialize(context);
+            }
+
+            _element.Save(_fileName);
+
+            _scene.Children.Add(_element);
+        }
+    }
+
     private sealed class MoveCommand(
         int zIndex,
         Element element,
         TimeSpan newStart, TimeSpan oldStart,
         TimeSpan newLength, TimeSpan oldLength,
-        Scene scene) : IRecordableCommand
+        Scene scene) : IRecordableCommand, IAffectsTimelineCommand
     {
         private readonly int _oldZIndex = element.ZIndex;
         private readonly TimeSpan _oldSceneDuration = scene.Duration;
         private readonly bool _adjustSceneDuration = GlobalConfiguration.Instance.EditorConfig.AutoAdjustSceneDuration;
+
+        public bool Nothing => newStart == oldStart && newLength == oldLength && zIndex == _oldZIndex;
+
+        public ImmutableArray<IStorable?> GetStorables() => [scene, element];
+
+        public ImmutableArray<TimeRange> GetAffectedRange()
+            => [new TimeRange(newStart, newLength), new TimeRange(oldStart, oldLength)];
 
         public void Do()
         {
@@ -907,6 +790,7 @@ public class Scene : ProjectItem
         private readonly bool _adjustSceneDuration;
         private readonly TimeSpan _oldSceneDuration;
         private readonly TimeSpan _newSceneDuration;
+        private readonly ImmutableArray<TimeRange> _affectedRange;
 
         public MultipleMoveCommand(
             Scene scene,
@@ -948,6 +832,13 @@ public class Scene : ProjectItem
                 {
                     _newSceneDuration = maxEndingTime;
                 }
+            }
+
+            if (!_conflict)
+            {
+                _affectedRange = elements
+                    .SelectMany(v => new[] { v.Range, v.Range.AddStart(_deltaTime) })
+                    .ToImmutableArray();
             }
         }
 
@@ -1003,6 +894,16 @@ public class Scene : ProjectItem
 
             return null;
         }
+
+        public ImmutableArray<IStorable?> GetStorables()
+        {
+            if (_conflict)
+                return [];
+
+            return [_scene, .. _elements];
+        }
+
+        public ImmutableArray<TimeRange> GetAffectedRange() => _affectedRange;
 
         public void Do()
         {

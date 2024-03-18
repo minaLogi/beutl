@@ -13,6 +13,7 @@ using Avalonia.Styling;
 using Avalonia.Threading;
 
 using Beutl.Helpers;
+using Beutl.Logging;
 using Beutl.Media;
 using Beutl.Media.Pixel;
 using Beutl.Media.Source;
@@ -28,6 +29,8 @@ using Beutl.Views.Dialogs;
 
 using FluentAvalonia.UI.Controls;
 
+using Microsoft.Extensions.Logging;
+
 namespace Beutl.Views;
 
 public sealed partial class Timeline : UserControl
@@ -41,6 +44,8 @@ public sealed partial class Timeline : UserControl
 
     internal MouseFlags _mouseFlag = MouseFlags.Free;
     internal TimeSpan _pointerFrame;
+    private bool _rightButtonPressed;
+    private readonly ILogger _logger = Log.CreateLogger<Timeline>();
     private TimelineViewModel? _viewModel;
     private readonly CompositeDisposable _disposables = [];
     private ElementView? _selectedElement;
@@ -181,7 +186,8 @@ public sealed partial class Timeline : UserControl
 
                         newElement.Save(RandomFileNameGenerator.Generate(Path.GetDirectoryName(ViewModel.Scene.FileName)!, Constants.ElementFileExtension));
 
-                        ViewModel.Scene.AddChild(newElement).DoAndRecord(CommandRecorder.Default);
+                        CommandRecorder recorder = ViewModel.EditorContext.CommandRecorder;
+                        ViewModel.Scene.AddChild(newElement).DoAndRecord(recorder);
 
                         ScrollTimelinePosition(newElement.Range, newElement.ZIndex);
                     }
@@ -236,7 +242,8 @@ public sealed partial class Timeline : UserControl
 
                             newElement.Save(RandomFileNameGenerator.Generate(dir, Constants.ElementFileExtension));
 
-                            ViewModel.Scene.AddChild(newElement).DoAndRecord(CommandRecorder.Default);
+                            CommandRecorder recorder = ViewModel.EditorContext.CommandRecorder;
+                            ViewModel.Scene.AddChild(newElement).DoAndRecord(recorder);
 
                             ScrollTimelinePosition(newElement.Range, newElement.ZIndex);
                         }
@@ -246,7 +253,7 @@ public sealed partial class Timeline : UserControl
         }
         catch (Exception ex)
         {
-            Telemetry.Exception(ex);
+            _logger.LogError(ex, "An exception has occurred.");
             NotificationService.ShowError(Message.AnUnexpectedErrorHasOccurred, ex.Message);
         }
     }
@@ -367,18 +374,36 @@ public sealed partial class Timeline : UserControl
         if (_pointerFrame >= viewModel.Scene.Duration)
         {
             _pointerFrame = viewModel.Scene.Duration - TimeSpan.FromSeconds(1d / rate);
-            _pointerFrame = _pointerFrame.RoundToRate(rate);
+        }
+        if (_pointerFrame < TimeSpan.Zero)
+        {
+            _pointerFrame = TimeSpan.Zero;
         }
 
         if (_mouseFlag == MouseFlags.SeekBarPressed)
         {
-            viewModel.Scene.CurrentFrame = _pointerFrame;
+            viewModel.EditorContext.CurrentTime.Value = _pointerFrame;
         }
         else if (_mouseFlag == MouseFlags.RangeSelectionPressed)
         {
             Rect rect = overlay.SelectionRange;
             overlay.SelectionRange = new(rect.Position, pointerPt.Position);
             UpdateRangeSelection();
+        }
+        else
+        {
+            Point posScale = e.GetPosition(Scale);
+
+            if (Scale.IsPointerOver && posScale.Y > Scale.Bounds.Height - 8)
+            {
+                BufferStatusViewModel.CacheBlock[] cacheBlocks = viewModel.EditorContext.BufferStatus.CacheBlocks.Value;
+
+                viewModel.HoveredCacheBlock.Value = Array.Find(cacheBlocks, v => new TimeRange(v.Start, v.Length).Contains(_pointerFrame));
+            }
+            else
+            {
+                viewModel.HoveredCacheBlock.Value = null;
+            }
         }
     }
 
@@ -395,7 +420,25 @@ public sealed partial class Timeline : UserControl
                 _rangeSelection.Clear();
             }
 
+            if (Scale.IsPointerOver && ViewModel.HoveredCacheBlock.Value is { } cache)
+            {
+                FrameCacheManager cacheManager = ViewModel.EditorContext.FrameCacheManager.Value;
+                long size = cacheManager.CalculateByteCount(cache.StartFrame, cache.StartFrame + cache.LengthFrame);
+
+                CacheTip.Content = $"""
+                    {Strings.MemoryUsage}: {Utilities.StringFormats.ToHumanReadableSize(size)}
+                    {Strings.StartTime}: {cache.Start}
+                    {Strings.DurationTime}: {cache.Length}
+                    {(cache.IsLocked ? Strings.Locked : Strings.Unlocked)}
+                    """;
+                CacheTip.IsOpen = true;
+            }
+
             _mouseFlag = MouseFlags.Free;
+        }
+        else if (pointerPt.Properties.PointerUpdateKind == PointerUpdateKind.RightButtonReleased)
+        {
+            _rightButtonPressed = false;
         }
     }
 
@@ -449,15 +492,22 @@ public sealed partial class Timeline : UserControl
             else
             {
                 _mouseFlag = MouseFlags.SeekBarPressed;
-                viewModel.Scene.CurrentFrame = viewModel.ClickedFrame;
+                viewModel.EditorContext.CurrentTime.Value = viewModel.ClickedFrame;
             }
         }
+
+        _rightButtonPressed = pointerPt.Properties.IsRightButtonPressed;
     }
 
     // ポインターが離れた
     private void TimelinePanel_PointerExited(object? sender, PointerEventArgs e)
     {
         _mouseFlag = MouseFlags.Free;
+
+        if (!_rightButtonPressed)
+        {
+            ViewModel.HoveredCacheBlock.Value = null;
+        }
     }
 
     // ドロップされた
@@ -476,6 +526,7 @@ public sealed partial class Timeline : UserControl
         {
             if (e.KeyModifiers == KeyModifiers.Control)
             {
+                CommandRecorder recorder = ViewModel.EditorContext.CommandRecorder;
                 var dialog = new AddElementDialog
                 {
                     DataContext = new AddElementDialogViewModel(
@@ -484,7 +535,8 @@ public sealed partial class Timeline : UserControl
                             viewModel.ClickedFrame,
                             TimeSpan.FromSeconds(5),
                             viewModel.CalculateClickedLayer(),
-                            InitialOperator: type))
+                            InitialOperator: type),
+                        recorder)
                 };
                 await dialog.ShowAsync();
             }
@@ -520,10 +572,12 @@ public sealed partial class Timeline : UserControl
     // 要素を追加
     private async void AddElementClick(object? sender, RoutedEventArgs e)
     {
+        CommandRecorder recorder = ViewModel.EditorContext.CommandRecorder;
         var dialog = new AddElementDialog
         {
             DataContext = new AddElementDialogViewModel(ViewModel.Scene,
-                new ElementDescription(ViewModel.ClickedFrame, TimeSpan.FromSeconds(5), ViewModel.CalculateClickedLayer()))
+                new ElementDescription(ViewModel.ClickedFrame, TimeSpan.FromSeconds(5), ViewModel.CalculateClickedLayer()),
+                recorder)
         };
         await dialog.ShowAsync();
     }
@@ -699,5 +753,9 @@ public sealed partial class Timeline : UserControl
                 };
             }
         }
+    }
+
+    private void Binding(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
     }
 }

@@ -2,20 +2,22 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <RuntimeIdentifiers>win-x64;linux-x64;osx-x64</RuntimeIdentifiers>
 
     <FFmpegBuildIn Condition="'$(FFmpegBuildIn)' == ''">True</FFmpegBuildIn>
+    <MFBuildIn Condition="'$(MFBuildIn)' == '' And $(TargetFramework.Contains('windows'))">True</MFBuildIn>
     <DefineConstants Condition="'$(FFmpegBuildIn)'=='True'">$(DefineConstants);FFMPEG_BUILD_IN</DefineConstants>
+    <DefineConstants Condition="'$(MFBuildIn)'=='True'">$(DefineConstants);MF_BUILD_IN</DefineConstants>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <ApplicationIcon>Assets\logo.ico</ApplicationIcon>
+    <ApplicationIcon>..\Beutl.Controls\Assets\logo.ico</ApplicationIcon>
   </PropertyGroup>
 
-  <ItemGroup>
-    <AvaloniaResource Include="Assets\**" />
-  </ItemGroup>
+  <PropertyGroup Condition="$(TargetFramework.Contains('windows'))">
+    <UseWindowsForms>true</UseWindowsForms>
+  </PropertyGroup>
 
-  <ItemGroup>
-    <Content Include="Assets\logo.ico" />
+  <ItemGroup Condition="$(TargetFramework.Contains('windows'))">
+    <Using Remove="System.Drawing" />
+    <Using Remove="System.Windows.Forms" />
   </ItemGroup>
 
   <ItemGroup>
@@ -34,7 +36,6 @@
     <PackageReference Include="FluentAvalonia.BreadcrumbBar" />
     <PackageReference Include="FluentAvaloniaUI" />
     <PackageReference Include="FluentIcons.FluentAvalonia" />
-    <PackageReference Include="Microsoft.ApplicationInsights" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Microsoft.Extensions.Logging" />
     <PackageReference Include="OpenTelemetry" />
@@ -43,7 +44,6 @@
     <PackageReference Include="PanelExtension" />
     <PackageReference Include="ReactiveProperty" />
     <PackageReference Include="Serilog.Extensions.Logging" />
-    <PackageReference Include="Serilog.Sinks.ApplicationInsights" />
     <PackageReference Include="Serilog.Sinks.Async" />
     <PackageReference Include="Serilog.Sinks.File" />
     <PackageReference Include="Serilog.Sinks.Debug" />
@@ -60,12 +60,17 @@
     <ProjectReference Include="..\Beutl.Api\Beutl.Api.csproj" />
     <ProjectReference Include="..\Beutl.Controls\Beutl.Controls.csproj" />
     <ProjectReference Condition="'$(NukePublish)'!='True'" Include="..\Beutl.PackageTools\Beutl.PackageTools.csproj" />
+    <ProjectReference Condition="'$(NukePublish)'!='True'" Include="..\Beutl.PackageTools.UI\Beutl.PackageTools.UI.csproj" />
     <ProjectReference Condition="'$(NukePublish)'!='True'" Include="..\Beutl.WaitingDialog\Beutl.WaitingDialog.csproj" />
     <ProjectReference Condition="'$(NukePublish)'!='True'" Include="..\Beutl.ExceptionHandler\Beutl.ExceptionHandler.csproj" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(FFmpegBuildIn)'=='True'">
     <ProjectReference Include="..\Beutl.Extensions.FFmpeg\Beutl.Extensions.FFmpeg.csproj" />
+  </ItemGroup>
+  
+  <ItemGroup Condition="'$(MFBuildIn)'=='True'">
+    <ProjectReference Include="..\Beutl.Extensions.MediaFoundation\Beutl.Extensions.MediaFoundation.csproj" />
   </ItemGroup>
   
   <ItemGroup>

@@ -1,4 +1,6 @@
-﻿using Avalonia.Controls;
+﻿using System.Collections.Immutable;
+
+using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Platform.Storage;
 
@@ -8,6 +10,7 @@ using Beutl.Controls;
 using Beutl.Graphics;
 using Beutl.Graphics.Transformation;
 using Beutl.Helpers;
+using Beutl.Logging;
 using Beutl.Media;
 using Beutl.Media.Pixel;
 using Beutl.ProjectSystem;
@@ -16,33 +19,13 @@ using Beutl.ViewModels;
 
 using FluentAvalonia.UI.Controls;
 
+using Microsoft.Extensions.Logging;
+
 using AvaImage = Avalonia.Controls.Image;
 using AvaPoint = Avalonia.Point;
 using AvaRect = Avalonia.Rect;
 
 namespace Beutl.Views;
-
-file static class CommandHelper
-{
-    public static IRecordableCommand? Compose(IRecordableCommand? first, IRecordableCommand? second)
-    {
-        if (second != null)
-        {
-            if (first != null)
-            {
-                return first.Append(second);
-            }
-            else
-            {
-                return second;
-            }
-        }
-        else
-        {
-            return first;
-        }
-    }
-}
 
 public partial class EditView
 {
@@ -61,14 +44,14 @@ public partial class EditView
 
         public float OldNextValue { get; } = next?.Value ?? 0;
 
-        public IRecordableCommand? CreateCommand()
+        public IRecordableCommand? CreateCommand(ImmutableArray<IStorable?> storables)
         {
-            return CommandHelper.Compose(
+            return RecordableCommands.Append(
                 Previous != null && Previous.Value != OldPreviousValue
-                    ? new ChangePropertyCommand<float>(Previous, KeyFrame<float>.ValueProperty, Previous.Value, OldPreviousValue)
+                    ? RecordableCommands.Edit(Previous, KeyFrame<float>.ValueProperty, Previous.Value, OldPreviousValue).WithStoables(storables)
                     : null,
                 Next != null && Next.Value != OldNextValue
-                    ? new ChangePropertyCommand<float>(Next, KeyFrame<float>.ValueProperty, Next.Value, OldNextValue)
+                    ? RecordableCommands.Edit(Next, KeyFrame<float>.ValueProperty, Next.Value, OldNextValue).WithStoables(storables)
                     : null);
         }
     }
@@ -170,7 +153,7 @@ public partial class EditView
 
         public Element? Element { get; private set; }
 
-        private static (TranslateTransform?, Matrix) FindOrCreateTranslation(Drawable drawable)
+        private (TranslateTransform?, Matrix) FindOrCreateTranslation(Drawable drawable)
         {
             switch (drawable.Transform)
             {
@@ -196,8 +179,8 @@ public partial class EditView
                         obj = new TranslateTransform();
                         transformGroup.Children.BeginRecord<ITransform>()
                             .Insert(0, obj)
-                            .ToCommand()
-                            .DoAndRecord(CommandRecorder.Default);
+                            .ToCommand([Element])
+                            .DoAndRecord(viewModel.CommandRecorder);
 
                         return (obj, Matrix.Identity);
                     }
@@ -221,7 +204,7 @@ public partial class EditView
         private KeyFrameState? FindKeyFramePairOrNull(CoreProperty<float> property)
         {
             int rate = viewModel.Scene.FindHierarchicalParent<Project>() is { } proj ? proj.GetFrameRate() : 30;
-            TimeSpan globalkeyTime = viewModel.Scene.CurrentFrame;
+            TimeSpan globalkeyTime = viewModel.CurrentTime.Value;
             TimeSpan localKeyTime = Element != null ? globalkeyTime - Element.Start : globalkeyTime;
 
             if (_translateTransform!.Animations.FirstOrDefault(v => v.Property == property) is KeyFrameAnimation<float> animation)
@@ -249,7 +232,7 @@ public partial class EditView
 
                 PointerPoint pointerPoint = e.GetCurrentPoint(Image);
                 AvaPoint imagePosition = pointerPoint.Position;
-                double scaleX = Image.Bounds.Size.Width / viewModel.Scene.Width;
+                double scaleX = Image.Bounds.Size.Width / viewModel.Scene.FrameSize.Width;
                 AvaPoint scaledPosition = imagePosition / scaleX;
                 AvaPoint delta = scaledPosition - _scaledStartPosition;
                 if (_translateTransform == null && Length(delta) >= 1)
@@ -286,6 +269,14 @@ public partial class EditView
                 }
 
                 _scaledStartPosition = scaledPosition;
+                if (Element != null)
+                {
+                    int rate = viewModel.Player.GetFrameRate();
+                    int st = (int)Element.Start.ToFrameNumber(rate);
+                    int ed = (int)Math.Ceiling(Element.Range.End.ToFrameNumber(rate));
+
+                    viewModel.FrameCacheManager.Value.DeleteAndUpdateBlocks(new[] { (st, ed) });
+                }
                 e.Handled = true;
             }
         }
@@ -315,16 +306,16 @@ public partial class EditView
             return true;
         }
 
-        private IRecordableCommand? CreateTranslationCommand()
+        private IRecordableCommand? CreateTranslationCommand(ImmutableArray<IStorable?> storables)
         {
             if (_translateTransform != null)
             {
-                return CommandHelper.Compose(
+                return RecordableCommands.Append(
                     _translateTransform.X != _oldTranslation.X
-                        ? new ChangePropertyCommand<float>(_translateTransform, TranslateTransform.XProperty, _translateTransform.X, _oldTranslation.X)
+                        ? RecordableCommands.Edit(_translateTransform, TranslateTransform.XProperty, _translateTransform.X, _oldTranslation.X).WithStoables(storables)
                         : null,
                     _translateTransform.Y != _oldTranslation.Y
-                        ? new ChangePropertyCommand<float>(_translateTransform, TranslateTransform.YProperty, _translateTransform.Y, _oldTranslation.Y)
+                        ? RecordableCommands.Edit(_translateTransform, TranslateTransform.YProperty, _translateTransform.Y, _oldTranslation.Y).WithStoables(storables)
                         : null);
             }
 
@@ -337,10 +328,10 @@ public partial class EditView
             {
                 _imagePressed = false;
 
-                IRecordableCommand? command = CommandHelper.Compose(
-                    CreateTranslationCommand(),
-                    CommandHelper.Compose(_xKeyFrame?.CreateCommand(), _yKeyFrame?.CreateCommand()));
-                command?.DoAndRecord(CommandRecorder.Default);
+                ImmutableArray<IStorable?> storables = [Element];
+                IRecordableCommand? command = CreateTranslationCommand(storables)
+                    .Append((_xKeyFrame?.CreateCommand(storables)).Append(_yKeyFrame?.CreateCommand(storables)));
+                command?.DoAndRecord(viewModel.CommandRecorder);
 
                 Element = null;
                 _translateTransform = null;
@@ -353,23 +344,24 @@ public partial class EditView
 
         public void OnPressed(PointerPressedEventArgs e)
         {
+            Scene scene = viewModel.Scene;
             PointerPoint pointerPoint = e.GetCurrentPoint(Image);
             _imagePressed = pointerPoint.Properties.IsLeftButtonPressed;
             AvaPoint imagePosition = pointerPoint.Position;
-            double scaleX = Image.Bounds.Size.Width / viewModel.Scene.Width;
+            double scaleX = Image.Bounds.Size.Width / scene.FrameSize.Width;
             _scaledStartPosition = imagePosition / scaleX;
 
-            Drawable = viewModel.Scene.Renderer.HitTest(new((float)_scaledStartPosition.X, (float)_scaledStartPosition.Y));
+            Drawable = viewModel.Renderer.Value.HitTest(new((float)_scaledStartPosition.X, (float)_scaledStartPosition.Y));
 
             if (Drawable != null)
             {
                 int zindex = (Drawable as DrawableDecorator)?.OriginalZIndex ?? Drawable.ZIndex;
-                Scene scene = viewModel.Scene;
+                TimeSpan time = viewModel.CurrentTime.Value;
 
                 Element = scene.Children.FirstOrDefault(v =>
                     v.ZIndex == zindex
-                    && v.Start <= scene.CurrentFrame
-                    && scene.CurrentFrame < v.Range.End);
+                    && v.Start <= time
+                    && time < v.Range.End);
 
                 if (Element != null)
                 {
@@ -383,6 +375,7 @@ public partial class EditView
 
     private sealed class MouseControlCrop : IMouseControlHandler
     {
+        private readonly ILogger _logger = Log.CreateLogger<MouseControlCrop>();
         private bool _pressed;
         private AvaPoint _start;
         private AvaPoint _position;
@@ -448,12 +441,11 @@ public partial class EditView
                 using Bitmap<Bgra8888> frame = await renderTask;
                 using Bitmap<Bgra8888> croped = CropFrame(frame, rect);
 
-                await WindowsClipboard.CopyImage(croped);
+                WindowsClipboard.CopyImage(croped);
             }
             catch (Exception ex)
             {
-                Telemetry.Exception(ex);
-                s_logger.Error(ex, "Failed to save image.");
+                _logger.LogError(ex, "Failed to save image.");
                 NotificationService.ShowError(Message.Failed_to_save_image, ex.Message);
             }
         }
@@ -462,7 +454,7 @@ public partial class EditView
         {
             if (_pressed)
             {
-                float scale = ViewModel.Scene.Width / (float)Image.Bounds.Width;
+                float scale = ViewModel.Scene.FrameSize.Width / (float)Image.Bounds.Width;
                 Rect rect = new Rect(_start.ToBtlPoint() * scale, _position.ToBtlPoint() * scale).Normalize();
 
                 if (ViewModel.Player.TcsForCrop == null)
@@ -514,8 +506,7 @@ public partial class EditView
                             }
                             catch (Exception ex)
                             {
-                                Telemetry.Exception(ex);
-                                s_logger.Error(ex, "Failed to save image.");
+                                _logger.LogError(ex, "Failed to save image.");
                                 NotificationService.ShowError(Message.Failed_to_save_image, ex.Message);
                             }
                         }
@@ -561,7 +552,6 @@ public partial class EditView
                 _pressed = false;
             }
         }
-
 
         public void OnPressed(PointerPressedEventArgs e)
         {

@@ -3,6 +3,7 @@ using System.Collections.Specialized;
 using System.Numerics;
 using System.Reactive.Subjects;
 using System.Text.Json.Nodes;
+using System.Windows.Input;
 
 using Avalonia;
 using Avalonia.Input;
@@ -11,6 +12,7 @@ using Avalonia.Input.Platform;
 using Beutl.Animation;
 using Beutl.Commands;
 using Beutl.Configuration;
+using Beutl.Logging;
 using Beutl.Media;
 using Beutl.Models;
 using Beutl.Operators.Configure;
@@ -22,11 +24,12 @@ using Beutl.Services.PrimitiveImpls;
 using DynamicData;
 
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 using Reactive.Bindings;
 using Reactive.Bindings.Extensions;
 
-using Serilog;
+using static Beutl.ViewModels.BufferStatusViewModel;
 
 namespace Beutl.ViewModels;
 
@@ -43,7 +46,7 @@ public interface ITimelineOptionsProvider
 
 public sealed class TimelineViewModel : IToolContext
 {
-    private readonly ILogger _logger = Log.ForContext<TimelineViewModel>();
+    private readonly ILogger _logger = Log.CreateLogger<TimelineViewModel>();
     private readonly CompositeDisposable _disposables = [];
     private readonly Subject<LayerHeaderViewModel> _layerHeightChanged = new();
     private readonly Dictionary<int, TrackedLayerTopObservable> _trackerCache = [];
@@ -53,28 +56,21 @@ public sealed class TimelineViewModel : IToolContext
         EditorContext = editViewModel;
         Scene = editViewModel.Scene;
         Player = editViewModel.Player;
+        FrameSelectionRange = new FrameSelectionRange(editViewModel.Scale).DisposeWith(_disposables);
         PanelWidth = Scene.GetObservable(Scene.DurationProperty)
             .CombineLatest(editViewModel.Scale)
             .Select(item => item.First.ToPixel(item.Second))
             .ToReadOnlyReactivePropertySlim()
             .AddTo(_disposables);
 
-        SeekBarMargin = Scene.GetObservable(Scene.CurrentFrameProperty)
+        SeekBarMargin = editViewModel.CurrentTime
             .CombineLatest(editViewModel.Scale)
-            .Select(item => new Thickness(item.First.ToPixel(item.Second), 0, 0, 0))
+            .Select(item => new Thickness(Math.Max(item.First.ToPixel(item.Second), 0), 0, 0, 0))
             .ToReadOnlyReactivePropertySlim()
             .AddTo(_disposables);
 
         EndingBarMargin = PanelWidth.Select(p => new Thickness(p, 0, 0, 0))
             .ToReadOnlyReactivePropertySlim()
-            .AddTo(_disposables);
-
-        IsCacheEnabled = editViewModel.Scene.GetObservable(Scene.CacheOptionsProperty)
-            .Select(v => v.IsEnabled)
-            .ToReactiveProperty()
-            .AddTo(_disposables);
-        IsCacheEnabled.Skip(1)
-            .Subscribe(v => Scene.CacheOptions = Scene.CacheOptions with { IsEnabled = v })
             .AddTo(_disposables);
 
         AddElement.Subscribe(editViewModel.AddElement).AddTo(_disposables);
@@ -126,25 +122,67 @@ public sealed class TimelineViewModel : IToolContext
         AutoAdjustSceneDuration = editorConfig.GetObservable(EditorConfig.AutoAdjustSceneDurationProperty).ToReactiveProperty();
         AutoAdjustSceneDuration.Subscribe(b => editorConfig.AutoAdjustSceneDuration = b);
 
+        IsLockCacheButtonEnabled = HoveredCacheBlock.Select(v => v is { IsLocked: false })
+            .ToReadOnlyReactivePropertySlim()
+            .DisposeWith(_disposables);
+
+        IsUnlockCacheButtonEnabled = HoveredCacheBlock.Select(v => v is { IsLocked: true })
+            .ToReadOnlyReactivePropertySlim()
+            .DisposeWith(_disposables);
+
+        DeleteAllFrameCache = new ReactiveCommandSlim()
+            // EditorContext.FrameCacheManager.Valueは変更されるので、Clearは直接代入しない
+            .WithSubscribe(() => EditorContext.FrameCacheManager.Value.Clear());
+
+        DeleteFrameCache = HoveredCacheBlock.Select(v => v != null)
+            .ToReactiveCommandSlim()
+            .WithSubscribe(() =>
+            {
+                if (HoveredCacheBlock.Value is { } block)
+                {
+                    FrameCacheManager manager = EditorContext.FrameCacheManager.Value;
+                    if (block.IsLocked)
+                    {
+                        manager.Unlock(
+                            block.StartFrame, block.StartFrame + block.LengthFrame);
+                    }
+
+                    manager.DeleteAndUpdateBlocks(
+                        new[] { (block.StartFrame, block.StartFrame + block.LengthFrame) });
+                }
+            });
+
+        LockFrameCache = HoveredCacheBlock.Select(v => v?.IsLocked == false)
+            .ToReactiveCommandSlim()
+            .WithSubscribe(() =>
+            {
+                if (HoveredCacheBlock.Value is { } block)
+                {
+                    FrameCacheManager manager = EditorContext.FrameCacheManager.Value;
+                    manager.Lock(
+                        block.StartFrame, block.StartFrame + block.LengthFrame);
+
+                    manager.UpdateBlocks();
+                }
+            });
+
+        UnlockFrameCache = HoveredCacheBlock.Select(v => v?.IsLocked == true)
+            .ToReactiveCommandSlim()
+            .WithSubscribe(() =>
+            {
+                if (HoveredCacheBlock.Value is { } block)
+                {
+                    FrameCacheManager manager = EditorContext.FrameCacheManager.Value;
+                    manager.Unlock(
+                        block.StartFrame, block.StartFrame + block.LengthFrame);
+
+                    manager.UpdateBlocks();
+                }
+            });
+
         // Todo: 設定からショートカットを変更できるようにする。
         KeyBindings = [];
-        PlatformHotkeyConfiguration? keyConf = Application.Current?.PlatformSettings?.HotkeyConfiguration;
-        if (keyConf != null)
-        {
-            KeyBindings.AddRange(keyConf.Paste.Select(i => new KeyBinding
-            {
-                Command = Paste,
-                Gesture = i
-            }));
-        }
-        else
-        {
-            KeyBindings.Add(new KeyBinding
-            {
-                Command = Paste,
-                Gesture = new KeyGesture(Key.V, keyConf?.CommandModifiers ?? KeyModifiers.Control)
-            });
-        }
+        ConfigureKeyBindings();
     }
 
     private void OnAdjustDurationToPointer()
@@ -152,17 +190,19 @@ public sealed class TimelineViewModel : IToolContext
         int rate = Scene.FindHierarchicalParent<Project>().GetFrameRate();
         TimeSpan time = ClickedFrame + TimeSpan.FromSeconds(1d / rate);
 
-        var command = new ChangePropertyCommand<TimeSpan>(Scene, Scene.DurationProperty, time, Scene.Duration);
-        command.DoAndRecord(CommandRecorder.Default);
+        RecordableCommands.Edit(Scene, Scene.DurationProperty, time)
+            .WithStoables([Scene])
+            .DoAndRecord(EditorContext.CommandRecorder);
     }
 
     private void OnAdjustDurationToCurrent()
     {
         int rate = Scene.FindHierarchicalParent<Project>().GetFrameRate();
-        TimeSpan time = Scene.CurrentFrame + TimeSpan.FromSeconds(1d / rate);
+        TimeSpan time = EditorContext.CurrentTime.Value + TimeSpan.FromSeconds(1d / rate);
 
-        var command = new ChangePropertyCommand<TimeSpan>(Scene, Scene.DurationProperty, time, Scene.Duration);
-        command.DoAndRecord(CommandRecorder.Default);
+        RecordableCommands.Edit(Scene, Scene.DurationProperty, time)
+            .WithStoables([Scene])
+            .DoAndRecord(EditorContext.CommandRecorder);
     }
 
     public Scene Scene { get; private set; }
@@ -173,8 +213,6 @@ public sealed class TimelineViewModel : IToolContext
 
     public ReadOnlyReactivePropertySlim<double> PanelWidth { get; }
 
-    public ReactiveProperty<bool> IsCacheEnabled { get; }
-
     public ReadOnlyReactivePropertySlim<Thickness> SeekBarMargin { get; }
 
     public ReadOnlyReactivePropertySlim<Thickness> EndingBarMargin { get; }
@@ -182,12 +220,26 @@ public sealed class TimelineViewModel : IToolContext
     public ReactiveCommand<ElementDescription> AddElement { get; } = new();
 
     [Obsolete("Use AddElement property instead.")]
-    public ReactiveCommand<ElementDescription> AddLayer => AddElement;
+    public ReactiveCommand<ElementDescription> AddLayer
+    {
+        get
+        {
+            Debug.Fail("Use AddElement property instead.");
+            return AddElement;
+        }
+    }
 
     public CoreList<ElementViewModel> Elements { get; } = [];
 
     [Obsolete("Use Elements property instead.")]
-    public CoreList<ElementViewModel> Layers => Elements;
+    public CoreList<ElementViewModel> Layers
+    {
+        get
+        {
+            Debug.Fail("Use Elements property instead.");
+            return Elements;
+        }
+    }
 
     public CoreList<InlineAnimationLayerViewModel> Inlines { get; } = [];
 
@@ -201,7 +253,23 @@ public sealed class TimelineViewModel : IToolContext
 
     public ReactiveCommandSlim AdjustDurationToCurrent { get; } = new();
 
+    public ReactiveCommandSlim DeleteAllFrameCache { get; }
+
+    public ReactiveCommandSlim DeleteFrameCache { get; }
+
+    public ReactiveCommandSlim LockFrameCache { get; }
+
+    public ReactiveCommandSlim UnlockFrameCache { get; }
+
     public ReactiveProperty<bool> AutoAdjustSceneDuration { get; }
+
+    public ReactivePropertySlim<CacheBlock?> HoveredCacheBlock { get; } = new();
+
+    public ReadOnlyReactivePropertySlim<bool> IsLockCacheButtonEnabled { get; }
+
+    public ReadOnlyReactivePropertySlim<bool> IsUnlockCacheButtonEnabled { get; }
+
+    public FrameSelectionRange FrameSelectionRange { get; }
 
     public TimeSpan ClickedFrame { get; set; }
 
@@ -282,7 +350,7 @@ public sealed class TimelineViewModel : IToolContext
                     MaxLayerCount = LayerHeaders.Count
                 };
 
-                _logger.Debug("The number of layers has been changed. ({Count})", count);
+                _logger.LogDebug("The number of layers has been changed. ({Count})", count);
             }
         }
     }
@@ -307,7 +375,7 @@ public sealed class TimelineViewModel : IToolContext
                     MaxLayerCount = LayerHeaders.Count
                 };
 
-                _logger.Debug("The number of layers has been changed. ({Count})", LayerHeaders.Count);
+                _logger.LogDebug("The number of layers has been changed. ({Count})", LayerHeaders.Count);
             }
         }
         else
@@ -415,7 +483,7 @@ public sealed class TimelineViewModel : IToolContext
                     }
                     catch (Exception ex)
                     {
-                        _logger.Error(ex, "An exception occurred while restoring the UI.");
+                        _logger.LogError(ex, "An exception occurred while restoring the UI.");
                     }
                 }
             }
@@ -594,6 +662,35 @@ public sealed class TimelineViewModel : IToolContext
     public ElementViewModel? GetViewModelFor(Element element)
     {
         return Elements.FirstOrDefault(x => x.Model == element);
+    }
+
+    // Todo: 設定からショートカットを変更できるようにする。
+    private void ConfigureKeyBindings()
+    {
+        static KeyBinding KeyBinding(Key key, KeyModifiers modifiers, ICommand command)
+        {
+            return new KeyBinding
+            {
+                Gesture = new KeyGesture(key, modifiers),
+                Command = command
+            };
+        }
+
+        PlatformHotkeyConfiguration? keyConf = Application.Current?.PlatformSettings?.HotkeyConfiguration;
+        if (keyConf != null)
+        {
+            KeyBindings.AddRange(keyConf.Paste.Select(i => new KeyBinding
+            {
+                Command = Paste,
+                Gesture = i
+            }));
+        }
+        else
+        {
+            KeyBindings.Add(KeyBinding(Key.V, keyConf?.CommandModifiers ?? KeyModifiers.Control, Paste));
+        }
+
+        //KeyBindings.Add(KeyBinding(Key.))
     }
 
     private sealed class TrackedLayerTopObservable(int layerNum, TimelineViewModel timeline) : LightweightObservableBase<double>, IDisposable

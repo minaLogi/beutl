@@ -38,9 +38,9 @@ public sealed partial class PropertyEditorMenu : UserControl
             {
                 button.ContextFlyout?.ShowAt(button);
             }
-            else if (viewModel.GetService<Scene>() is { } scene)
+            else if (viewModel.GetService<EditViewModel>() is { } editViewModel)
             {
-                TimeSpan keyTime = scene.CurrentFrame;
+                TimeSpan keyTime = editViewModel.CurrentTime.Value;
                 if (symbolIcon.IsFilled)
                 {
                     viewModel.RemoveKeyFrame(keyTime);
@@ -62,7 +62,7 @@ public sealed partial class PropertyEditorMenu : UserControl
             viewModel.PrepareToEditAnimation();
 
             // タイムラインのタブを開く
-            var anmTimelineViewModel = new GraphEditorTabViewModel();
+            var anmTimelineViewModel = new GraphEditorTabViewModel(editViewModel);
 
             Type viewModelType = typeof(GraphEditorViewModel<>).MakeGenericType(animatableProperty.PropertyType);
             anmTimelineViewModel.SelectedAnimation.Value = (GraphEditorViewModel)Activator.CreateInstance(

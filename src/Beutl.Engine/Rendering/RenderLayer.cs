@@ -115,14 +115,54 @@ public sealed class RenderLayer(RenderScene renderScene) : IDisposable
             Drawable drawable = node.Drawable;
             if (entry.IsDirty)
             {
-                var dcanvas = new DeferradCanvas(node, renderScene.Size);
+                using var dcanvas = new DeferradCanvas(node, renderScene.Size);
                 drawable.Render(dcanvas);
                 entry.IsDirty = false;
             }
 
+            RenderCacheContext? cacheContext = canvas.GetCacheContext();
+            if (cacheContext != null)
+            {
+                void AcceptsAll(IGraphicNode node)
+                {
+                    RenderCache cache = cacheContext.GetCache(node);
+
+                    if (node is ContainerNode c)
+                    {
+                        foreach (IGraphicNode item in c.Children)
+                        {
+                            AcceptsAll(item);
+                        }
+
+                        cache.CaptureChildren();
+                    }
+
+                    if (node is ISupportRenderCache supportCache)
+                    {
+                        supportCache.Accepts(cache);
+                        if (cache.IsCached
+                            && !(cache.CanCacheBoundary()
+                            && cacheContext.CanCacheRecursiveChildrenOnly(node)))
+                        {
+                            cache.Invalidate();
+                        }
+                    }
+                    else
+                    {
+                        cache.IncrementRenderCount();
+                        if (cache.IsCached && !cacheContext.CanCacheRecursive(node))
+                        {
+                            cache.Invalidate();
+                        }
+                    }
+                }
+
+                AcceptsAll(node);
+            }
+
             canvas.DrawNode(node);
 
-            canvas.GetCacheContext()?.MakeCache(node, canvas);
+            cacheContext?.MakeCache(node, canvas);
         }
     }
 
@@ -165,7 +205,8 @@ public sealed class RenderLayer(RenderScene renderScene) : IDisposable
         {
             DrawableNode node = entry.Node;
 
-            list[index++] = node.Drawable.Bounds;
+            list[index++] = node.Bounds;
+            //list[index++] = node.Drawable.Bounds;
         }
 
         return list;

@@ -3,6 +3,8 @@
 using Beutl.Configuration;
 using Beutl.Services;
 
+using Microsoft.Extensions.Logging;
+
 using OpenTelemetry.Trace;
 
 using Reactive.Bindings;
@@ -114,19 +116,24 @@ public partial class MenuBarViewModel
                     else
                     {
                         Type type = item.Extension.Value.GetType();
-                        _logger.Error("{Extension} failed to save file", type.FullName ?? type.Name);
+                        _logger.LogError("{Extension} failed to save file", type.FullName ?? type.Name);
                         NotificationService.ShowError(Message.Unable_to_save_file, item.FileName.Value);
                     }
                 }
             }
 
             NotificationService.ShowSuccess(string.Empty, string.Format(Message.ItemsSaved, itemsCount.ToString()));
+
+            if (GlobalConfiguration.Instance.EditorConfig.IsAutoSaveEnabled
+                && EditorService.Current.TabItems.All(v => v.Context.Value is ISupportAutoSaveEditorContext))
+            {
+                NotificationService.ShowInformation(string.Empty, Message.Files_are_saved_automatically);
+            }
         }
         catch (Exception ex)
         {
             activity?.SetStatus(ActivityStatusCode.Error);
-            activity?.RecordException(ex);
-            _logger.Error(ex, "Failed to save files");
+            _logger.LogError(ex, "Failed to save files");
             NotificationService.ShowError(string.Empty, Message.OperationCouldNotBeExecuted);
         }
         finally
@@ -148,19 +155,24 @@ public partial class MenuBarViewModel
                 if (result)
                 {
                     NotificationService.ShowSuccess(string.Empty, string.Format(Message.ItemSaved, item.FileName));
+
+                    if (GlobalConfiguration.Instance.EditorConfig.IsAutoSaveEnabled
+                        && item.Context.Value is ISupportAutoSaveEditorContext)
+                    {
+                        NotificationService.ShowInformation(string.Empty, Message.Files_are_saved_automatically);
+                    }
                 }
                 else
                 {
                     Type type = item.Extension.Value.GetType();
-                    _logger.Error("{Extension} failed to save file", type.FullName ?? type.Name);
+                    _logger.LogError("{Extension} failed to save file", type.FullName ?? type.Name);
                     NotificationService.ShowInformation(string.Empty, Message.OperationCouldNotBeExecuted);
                 }
             }
             catch (Exception ex)
             {
                 activity?.SetStatus(ActivityStatusCode.Error);
-                activity?.RecordException(ex);
-                _logger.Error(ex, "Failed to save file");
+                _logger.LogError(ex, "Failed to save file");
                 NotificationService.ShowError(string.Empty, Message.OperationCouldNotBeExecuted);
             }
         }

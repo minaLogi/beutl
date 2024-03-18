@@ -1,4 +1,7 @@
-﻿using Beutl.Graphics.Rendering;
+﻿using System.ComponentModel;
+
+using Beutl.Collections.Pooled;
+using Beutl.Graphics.Rendering;
 using Beutl.Media.Source;
 
 using SkiaSharp;
@@ -7,31 +10,44 @@ namespace Beutl.Graphics.Effects;
 
 public sealed class EffectTarget : IDisposable
 {
+    [Obsolete("Use a constructor with no parameters.")]
     public static readonly EffectTarget Empty = new();
 
     private object? _target;
 
-    public EffectTarget(FilterEffectNode node)
+    internal readonly PooledList<FEItemWrapper> _history = [];
+
+    public EffectTarget(IGraphicNode node)
     {
         _target = node;
-        Size = node.Bounds.Size;
+        OriginalBounds = node.Bounds;
+        Bounds = node.Bounds;
     }
 
-    public EffectTarget(Ref<SKSurface> surface, Size size)
+    public EffectTarget(Ref<SKSurface> surface, Rect originalBounds)
     {
         _target = surface.Clone();
-        Size = size;
+        OriginalBounds = originalBounds;
+        Bounds = originalBounds;
     }
 
     public EffectTarget()
     {
     }
 
-    public Size Size { get; private set; }
+    public Rect OriginalBounds { get; set; }
 
-    public FilterEffectNode? Node => _target as FilterEffectNode;
+    public Rect Bounds { get; set; }
+
+    [Obsolete()]
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public Size Size => Bounds.Size;
+
+    public IGraphicNode? Node => _target as IGraphicNode;
 
     public Ref<SKSurface>? Surface => _target as Ref<SKSurface>;
+
+    public bool IsEmpty => _target == null;
 
     public EffectTarget Clone()
     {
@@ -41,7 +57,12 @@ public sealed class EffectTarget : IDisposable
         }
         else if (Surface != null)
         {
-            return new EffectTarget(Surface, Size);
+            var obj = new EffectTarget(Surface, OriginalBounds)
+            {
+                Bounds = Bounds
+            };
+            obj._history.AddRange(_history.Select(v => v.Inherit()));
+            return obj;
         }
         else
         {
@@ -53,17 +74,15 @@ public sealed class EffectTarget : IDisposable
     {
         Surface?.Dispose();
         _target = null;
-        Size = default;
+        OriginalBounds = default;
+        _history.Dispose();
     }
 
     public void Draw(ImmediateCanvas canvas)
     {
         if (Node != null)
         {
-            foreach (IGraphicNode item in Node.Children)
-            {
-                canvas.DrawNode(item);
-            }
+            canvas.DrawNode(Node);
         }
         else if (Surface != null)
         {
@@ -71,4 +90,3 @@ public sealed class EffectTarget : IDisposable
         }
     }
 }
-

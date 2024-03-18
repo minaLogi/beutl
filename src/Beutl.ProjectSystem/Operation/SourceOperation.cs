@@ -41,62 +41,12 @@ public sealed class SourceOperation : Hierarchical, IAffectsRender
     [NotAutoSerialized]
     public ICoreList<SourceOperator> Children => _children;
 
-    public IRecordableCommand OnSplit(bool backward, TimeSpan startDelta,TimeSpan lengthDelta)
+    public IRecordableCommand OnSplit(bool backward, TimeSpan startDelta, TimeSpan lengthDelta)
     {
         return _children.Select(v => v.OnSplit(backward, startDelta, lengthDelta))
             .Where(v => v != null)
             .ToArray()!
             .ToCommand();
-    }
-
-    [ObsoleteSerializationApi]
-    public override void ReadFromJson(JsonObject json)
-    {
-        base.ReadFromJson(json);
-
-        if (json.TryGetPropertyValue(nameof(Children), out JsonNode? childrenNode)
-            && childrenNode is JsonArray childrenArray)
-        {
-            foreach (JsonObject operatorJson in childrenArray.OfType<JsonObject>())
-            {
-                Type? type = operatorJson.GetDiscriminator();
-                SourceOperator? @operator = null;
-                if (type?.IsAssignableTo(typeof(SourceOperator)) ?? false)
-                {
-                    @operator = Activator.CreateInstance(type) as SourceOperator;
-                }
-
-                @operator ??= new DummySourceOperator();
-                @operator.ReadFromJson(operatorJson);
-                Children.Add(@operator);
-            }
-        }
-    }
-
-    [ObsoleteSerializationApi]
-    public override void WriteToJson(JsonObject json)
-    {
-        base.WriteToJson(json);
-
-        Span<SourceOperator> children = _children.GetMarshal().Value;
-        if (children.Length > 0)
-        {
-            var array = new JsonArray();
-
-            foreach (SourceOperator item in children)
-            {
-                var itemJson = new JsonObject();
-                item.WriteToJson(itemJson);
-
-                // DummySourceOperatorはReadFromJsonで取得した、Jsonをリレーするので型名は書かない。
-                if (item is not DummySourceOperator)
-                    itemJson.WriteDiscriminator(item.GetType());
-
-                array.Add(itemJson);
-            }
-
-            json[nameof(Children)] = array;
-        }
     }
 
     public override void Serialize(ICoreSerializationContext context)
@@ -225,27 +175,33 @@ public sealed class SourceOperation : Hierarchical, IAffectsRender
     {
         ArgumentNullException.ThrowIfNull(@operator);
 
+        IStorable? storable = this.FindHierarchicalParent<IStorable>();
+
         return Children.BeginRecord<SourceOperator>()
             .Add(@operator)
-            .ToCommand();
+            .ToCommand([storable]);
     }
 
     public IRecordableCommand RemoveChild(SourceOperator @operator)
     {
         ArgumentNullException.ThrowIfNull(@operator);
 
+        IStorable? storable = this.FindHierarchicalParent<IStorable>();
+
         return Children.BeginRecord<SourceOperator>()
             .Remove(@operator)
-            .ToCommand();
+            .ToCommand([storable]);
     }
 
     public IRecordableCommand InsertChild(int index, SourceOperator @operator)
     {
         ArgumentNullException.ThrowIfNull(@operator);
 
+        IStorable? storable = this.FindHierarchicalParent<IStorable>();
+
         return Children.BeginRecord<SourceOperator>()
             .Insert(index, @operator)
-            .ToCommand();
+            .ToCommand([storable]);
     }
 
     private void OnOperatorsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)

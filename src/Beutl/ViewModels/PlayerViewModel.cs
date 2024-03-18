@@ -6,20 +6,23 @@ using Beutl.Audio.Platforms.XAudio2;
 using Beutl.Configuration;
 using Beutl.Graphics;
 using Beutl.Graphics.Rendering;
+using Beutl.Logging;
 using Beutl.Media;
 using Beutl.Media.Music;
 using Beutl.Media.Music.Samples;
 using Beutl.Media.Pixel;
+using Beutl.Media.Source;
+using Beutl.Models;
 using Beutl.ProjectSystem;
 using Beutl.Rendering;
 using Beutl.Rendering.Cache;
 using Beutl.Services;
 
+using Microsoft.Extensions.Logging;
+
 using OpenTK.Audio.OpenAL;
 
 using Reactive.Bindings;
-
-using Serilog;
 
 using SkiaSharp;
 
@@ -30,12 +33,13 @@ namespace Beutl.ViewModels;
 public sealed class PlayerViewModel : IDisposable
 {
     private static readonly TimeSpan s_second = TimeSpan.FromSeconds(1);
-    private readonly ILogger _logger = Log.ForContext<PlayerViewModel>();
+    private readonly ILogger _logger = Log.CreateLogger<PlayerViewModel>();
     private readonly CompositeDisposable _disposables = [];
     private readonly ReactivePropertySlim<bool> _isEnabled;
     private readonly EditViewModel _editViewModel;
+    private IDisposable? _currentFrameSubscription;
     private CancellationTokenSource? _cts;
-    private bool _playingAndRendering;
+    private Size _maxFrameSize;
 
     public PlayerViewModel(EditViewModel editViewModel)
     {
@@ -60,7 +64,7 @@ public sealed class PlayerViewModel : IDisposable
             .WithSubscribe(() =>
             {
                 int rate = GetFrameRate();
-                UpdateCurrentFrame(Scene.CurrentFrame + TimeSpan.FromSeconds(1d / rate));
+                UpdateCurrentFrame(_editViewModel.CurrentTime.Value + TimeSpan.FromSeconds(1d / rate));
             })
             .DisposeWith(_disposables);
 
@@ -68,33 +72,19 @@ public sealed class PlayerViewModel : IDisposable
             .WithSubscribe(() =>
             {
                 int rate = GetFrameRate();
-                UpdateCurrentFrame(Scene.CurrentFrame - TimeSpan.FromSeconds(1d / rate));
+                UpdateCurrentFrame(_editViewModel.CurrentTime.Value - TimeSpan.FromSeconds(1d / rate));
             })
             .DisposeWith(_disposables);
 
         Start = new ReactiveCommand(_isEnabled)
-            .WithSubscribe(() => Scene.CurrentFrame = TimeSpan.Zero)
+            .WithSubscribe(() => _editViewModel.CurrentTime.Value = TimeSpan.Zero)
             .DisposeWith(_disposables);
 
         End = new ReactiveCommand(_isEnabled)
-            .WithSubscribe(() => Scene.CurrentFrame = Scene.Duration)
+            .WithSubscribe(() => _editViewModel.CurrentTime.Value = Scene.Duration)
             .DisposeWith(_disposables);
 
-        Scene.Renderer.RenderInvalidated += Renderer_RenderInvalidated;
-        Scene.GetPropertyChangedObservable(Scene.RendererProperty)
-            .Subscribe(a =>
-            {
-                if (a.OldValue != null)
-                {
-                    a.OldValue.RenderInvalidated -= Renderer_RenderInvalidated;
-                }
-
-                if (a.NewValue != null)
-                {
-                    a.NewValue.RenderInvalidated += Renderer_RenderInvalidated;
-                }
-            })
-            .DisposeWith(_disposables);
+        Scene.Invalidated += OnSceneInvalidated;
 
         _isEnabled.Subscribe(v =>
             {
@@ -105,15 +95,28 @@ public sealed class PlayerViewModel : IDisposable
             })
             .DisposeWith(_disposables);
 
-        CurrentFrame = Scene.GetObservable(Scene.CurrentFrameProperty)
+        CurrentFrame = _editViewModel.CurrentTime
             .ToReactiveProperty()
             .DisposeWith(_disposables);
-        CurrentFrame.Subscribe(UpdateCurrentFrame)
-            .DisposeWith(_disposables);
+        _currentFrameSubscription = CurrentFrame.Subscribe(UpdateCurrentFrame);
 
         Duration = Scene.GetObservable(Scene.DurationProperty)
             .ToReadOnlyReactiveProperty()
             .DisposeWith(_disposables);
+    }
+
+    private void OnSceneInvalidated(object? sender, RenderInvalidatedEventArgs e)
+    {
+        if (e is TimelineInvalidatedEventArgs timelineInvalidated)
+        {
+            TimeSpan time = _editViewModel.CurrentTime.Value;
+            if (!timelineInvalidated.AffectedRange.Any(v => v.Contains(time)))
+            {
+                return;
+            }
+        }
+
+        QueueRender();
     }
 
     public Scene? Scene { get; set; }
@@ -149,65 +152,152 @@ public sealed class PlayerViewModel : IDisposable
     public event EventHandler? PreviewInvalidated;
 
     // View側から設定
-    public Size MaxFrameSize { get; set; }
-
-    public Rect LastSelectedRect { get; set; }
-
-    public async void Play()
+    public Size MaxFrameSize
     {
-        if (!_isEnabled.Value || Scene == null)
-            return;
-
-        IRenderer renderer = Scene.Renderer;
-        renderer.RenderInvalidated -= Renderer_RenderInvalidated;
-
-        try
+        get => _maxFrameSize;
+        set
         {
-            IsPlaying.Value = true;
-            int rate = GetFrameRate();
+            _maxFrameSize = value;
 
-            PlayAudio(Scene);
-
-            TimeSpan tick = TimeSpan.FromSeconds(1d / rate);
-            TimeSpan startFrame = Scene.CurrentFrame;
-            DateTime startTime = DateTime.Now;
-            TimeSpan duration = Scene.Duration;
-            var tcs = new TaskCompletionSource();
-            using var timer = new System.Timers.Timer(tick);
-
-            timer.Elapsed += (_, e) =>
+            if (_maxFrameSize != value)
             {
-                TimeSpan time = (e.SignalTime - startTime) + startFrame;
-                time = time.RoundToRate(rate);
-
-                if (time >= duration || !IsPlaying.Value)
+                FrameCacheManager frameCacheManager = _editViewModel.FrameCacheManager.Value;
+                var frameSize = frameCacheManager.FrameSize.ToSize(1);
+                float scale = (float)Stretch.Uniform.CalculateScaling(MaxFrameSize, frameSize, StretchDirection.Both).X;
+                if (scale != 0)
                 {
-                    timer.Stop();
-                    tcs.SetResult();
+                    int den = (int)(1 / scale);
+                    if (den % 2 == 1)
+                    {
+                        den++;
+                    }
+
+                    frameCacheManager.Options = frameCacheManager.Options with
+                    {
+                        Size = PixelSize.FromSize(frameSize, 1f / den)
+                    };
                 }
                 else
                 {
-                    Render(renderer, time);
-                }
-            };
-            timer.Start();
 
-            await tcs.Task;
-            IsPlaying.Value = false;
-        }
-        catch (Exception ex)
-        {
-            // 本来ここには例外が来ないはず
-            Telemetry.Exception(ex);
-            _logger.Error(ex, "An exception occurred during the playback process.");
-        }
-        finally
-        {
-            renderer.RenderInvalidated += Renderer_RenderInvalidated;
+                    frameCacheManager.Options = frameCacheManager.Options with
+                    {
+                        Size = null
+                    };
+                }
+            }
         }
     }
 
-    private int GetFrameRate()
+    public Rect LastSelectedRect { get; set; }
+
+    public void Play()
+    {
+        Task.Run(async () =>
+        {
+            if (!_isEnabled.Value || Scene == null)
+                return;
+
+            IRenderer renderer = _editViewModel.Renderer.Value;
+            BufferStatusViewModel bufferStatus = _editViewModel.BufferStatus;
+            FrameCacheManager frameCacheManager = _editViewModel.FrameCacheManager.Value;
+            Scene.Invalidated -= OnSceneInvalidated;
+            _currentFrameSubscription?.Dispose();
+
+            try
+            {
+                IsPlaying.Value = true;
+                int rate = GetFrameRate();
+
+                TimeSpan tick = TimeSpan.FromSeconds(1d / rate);
+                TimeSpan startTime = _editViewModel.CurrentTime.Value;
+                TimeSpan durationTime = Scene.Duration;
+                int startFrame = (int)startTime.ToFrameNumber(rate);
+                int durationFrame = (int)Math.Ceiling(durationTime.ToFrameNumber(rate));
+                var tcs = new TaskCompletionSource();
+                bufferStatus.StartTime.Value = startTime;
+                bufferStatus.EndTime.Value = startTime;
+                frameCacheManager.Options = frameCacheManager.Options with
+                {
+                    DeletionStrategy = FrameCacheDeletionStrategy.BackwardBlock
+                };
+
+                frameCacheManager.CurrentFrame = startFrame;
+                using var playerImpl = new BufferedPlayer(_editViewModel, Scene, IsPlaying, rate);
+                playerImpl.Start();
+
+                PlayAudio(Scene);
+
+                using var timer = new System.Timers.Timer(tick);
+                bool timerProcessing = false;
+                timer.Elapsed += (_, e) =>
+                {
+                    startFrame++;
+
+                    if (startFrame >= durationFrame || !IsPlaying.Value)
+                    {
+                        timer.Stop();
+                        tcs.TrySetResult();
+                        return;
+                    }
+
+                    if (timerProcessing)
+                    {
+                        playerImpl.Skipped(startFrame);
+                        return;
+                    }
+
+                    try
+                    {
+                        timerProcessing = true;
+
+                        if (playerImpl.TryDequeue(out IPlayer.Frame frame))
+                        {
+                            // 所有権が移転したので
+                            using (frame.Bitmap)
+                            {
+                                UpdateImage(frame.Bitmap.Value);
+
+                                if (Scene != null)
+                                {
+                                    _editViewModel.CurrentTime.Value = TimeSpanExtensions.ToTimeSpan(frame.Time, rate);
+                                    _editViewModel.FrameCacheManager.Value.CurrentFrame = frame.Time;
+                                }
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        timerProcessing = false;
+                    }
+                };
+                timer.Start();
+
+                await tcs.Task;
+                frameCacheManager.UpdateBlocks();
+                IsPlaying.Value = false;
+                bufferStatus.StartTime.Value = TimeSpan.Zero;
+                bufferStatus.EndTime.Value = TimeSpan.Zero;
+            }
+            catch (Exception ex)
+            {
+                // 本来ここには例外が来ないはず
+                _logger.LogError(ex, "An exception occurred during the playback process.");
+            }
+            finally
+            {
+                frameCacheManager.Options = frameCacheManager.Options with
+                {
+                    DeletionStrategy = FrameCacheDeletionStrategy.Old
+                };
+
+                _currentFrameSubscription = CurrentFrame.Subscribe(UpdateCurrentFrame);
+                Scene.Invalidated += OnSceneInvalidated;
+            }
+        });
+    }
+
+    public int GetFrameRate()
     {
         int rate = Project?.GetFrameRate() ?? 30;
         if (rate <= 0)
@@ -251,9 +341,9 @@ public sealed class PlayerViewModel : IDisposable
 
     private async Task PlayWithXA2(XAudioContext audioContext, Scene scene)
     {
-        IComposer composer = scene.Composer;
+        IComposer composer = _editViewModel.Composer.Value;
         int sampleRate = composer.SampleRate;
-        TimeSpan cur = scene.CurrentFrame;
+        TimeSpan cur = _editViewModel.CurrentTime.Value;
         var fmt = new WaveFormat(sampleRate, 32, 2);
         var source = new XAudioSource(audioContext);
         var primaryBuffer = new XAudioBuffer();
@@ -305,9 +395,8 @@ public sealed class PlayerViewModel : IDisposable
         }
         catch (Exception ex)
         {
-            Telemetry.Exception(ex);
             NotificationService.ShowError(Message.AnUnexpectedErrorHasOccurred, Message.An_exception_occurred_during_audio_playback);
-            _logger.Error(ex, "An exception occurred during audio playback.");
+            _logger.LogError(ex, "An exception occurred during audio playback.");
             IsPlaying.Value = false;
         }
         finally
@@ -325,8 +414,8 @@ public sealed class PlayerViewModel : IDisposable
         {
             audioContext.MakeCurrent();
 
-            IComposer composer = scene.Composer;
-            TimeSpan cur = scene.CurrentFrame;
+            IComposer composer = _editViewModel.Composer.Value;
+            TimeSpan cur = _editViewModel.CurrentTime.Value;
             int[] buffers = AL.GenBuffers(2);
             int source = AL.GenSource();
 
@@ -380,9 +469,8 @@ public sealed class PlayerViewModel : IDisposable
         }
         catch (Exception ex)
         {
-            Telemetry.Exception(ex);
             NotificationService.ShowError(Message.AnUnexpectedErrorHasOccurred, Message.An_exception_occurred_during_audio_playback);
-            _logger.Error(ex, "An exception occurred during audio playback.");
+            _logger.LogError(ex, "An exception occurred during audio playback.");
             IsPlaying.Value = false;
         }
     }
@@ -390,39 +478,6 @@ public sealed class PlayerViewModel : IDisposable
     public void Pause()
     {
         IsPlaying.Value = false;
-    }
-
-    private void Render(IRenderer renderer, TimeSpan timeSpan)
-    {
-        if (_playingAndRendering)
-            return;
-        _playingAndRendering = true;
-
-        RenderThread.Dispatcher.Dispatch(() =>
-        {
-            try
-            {
-                if (IsPlaying.Value && renderer.Render(timeSpan))
-                {
-                    using Bitmap<Bgra8888> bitmap = renderer.Snapshot();
-                    UpdateImage(bitmap);
-
-                    if (Scene != null)
-                        Scene.CurrentFrame = timeSpan;
-                }
-            }
-            catch (Exception ex)
-            {
-                Telemetry.Exception(ex);
-                NotificationService.ShowError(Message.AnUnexpectedErrorHasOccurred, Message.An_exception_occurred_while_drawing_frame);
-                _logger.Error(ex, "An exception occurred while drawing the frame.");
-                IsPlaying.Value = false;
-            }
-            finally
-            {
-                _playingAndRendering = false;
-            }
-        });
     }
 
     private unsafe void UpdateImage(Bitmap<Bgra8888> source)
@@ -453,7 +508,7 @@ public sealed class PlayerViewModel : IDisposable
         PreviewInvalidated?.Invoke(this, EventArgs.Empty);
     }
 
-    private void DrawBoundaries(Renderer renderer)
+    private void DrawBoundaries(Renderer renderer, ImmediateCanvas canvas)
     {
         int? selected = _editViewModel.SelectedLayerNumber.Value;
         if (selected.HasValue)
@@ -463,14 +518,13 @@ public sealed class PlayerViewModel : IDisposable
             if (scale == 0)
                 scale = 1;
 
-            ImmediateCanvas canvas = Renderer.GetInternalCanvas(renderer);
             Rect[] boundary = renderer.RenderScene[selected.Value].GetBoundaries();
             if (boundary.Length > 0)
             {
-                var pen = new Media.Immutable.ImmutablePen(Media.Brushes.White, null, 0, 1 / scale);
+                var pen = new Media.Immutable.ImmutablePen(Brushes.White, null, 0, 1 / scale);
                 bool exactBounds = GlobalConfiguration.Instance.ViewConfig.ShowExactBoundaries;
 
-                foreach (Rect item in renderer.RenderScene[selected.Value].GetBoundaries())
+                foreach (Rect item in boundary)
                 {
                     Rect rect = item;
                     if (!exactBounds)
@@ -484,56 +538,112 @@ public sealed class PlayerViewModel : IDisposable
         }
     }
 
-    private void Renderer_RenderInvalidated(object? sender, TimeSpan e)
+    private void QueueRender()
     {
-        void RenderOnRenderThread()
+        if (_editViewModel.Renderer.Value.IsGraphicsRendering)
+            return;
+
+        void RenderOnRenderThread(CancellationToken token)
         {
+            if (token.IsCancellationRequested)
+                return;
+
             RenderThread.Dispatcher.Dispatch(() =>
             {
                 try
                 {
-                    if (Scene is { Renderer: Renderer renderer }
-                        && renderer.Render(Scene.CurrentFrame))
-                    {
-                        DrawBoundaries(renderer);
+                    SceneRenderer renderer = _editViewModel.Renderer.Value;
+                    FrameCacheManager cacheManager = _editViewModel.FrameCacheManager.Value;
+                    if (renderer is not { IsDisposed: false, IsGraphicsRendering: false })
+                        return;
 
-                        using Media.Bitmap<Bgra8888> bitmap = renderer.Snapshot();
-                        UpdateImage(bitmap);
+                    int rate = GetFrameRate();
+                    TimeSpan time = _editViewModel.CurrentTime.Value;
+                    int frame = (int)Math.Round(time.ToFrameNumber(rate), MidpointRounding.AwayFromZero);
+                    time = TimeSpanExtensions.ToTimeSpan(frame, rate);
+                    Bitmap<Bgra8888>? bitmap = null;
+
+                    if (cacheManager.TryGet(frame, out var cache))
+                    {
+                        using (cache)
+                        {
+                            renderer.RenderScene.Clear();
+                            renderer.Evaluate(time);
+
+                            ImmediateCanvas canvas = Renderer.GetInternalCanvas(renderer);
+                            canvas.Clear();
+
+                            using (canvas.PushTransform(
+                                Matrix.CreateScale(canvas.Size.Width / (float)cache.Value.Width, canvas.Size.Height / (float)cache.Value.Height)))
+                            {
+                                canvas.DrawBitmap(cache.Value, Brushes.White, null);
+                            }
+
+                            DrawBoundaries(renderer, canvas);
+
+                            bitmap = renderer.Snapshot();
+                        }
+                    }
+                    else if (renderer.Render(time))
+                    {
+                        using (var forCache = Ref<Bitmap<Bgra8888>>.Create(renderer.Snapshot()))
+                        {
+                            cacheManager.Add(frame, forCache);
+                            cacheManager.UpdateBlocks();
+                        }
+
+                        ImmediateCanvas canvas = Renderer.GetInternalCanvas(renderer);
+                        DrawBoundaries(renderer, canvas);
+
+                        bitmap = renderer.Snapshot();
+                    }
+
+                    if (bitmap != null)
+                    {
+                        using (bitmap)
+                        {
+                            UpdateImage(bitmap);
+                        }
                     }
                 }
                 catch (Exception ex)
                 {
-                    Telemetry.Exception(ex);
                     NotificationService.ShowError(Message.AnUnexpectedErrorHasOccurred, Message.An_exception_occurred_while_drawing_frame);
-                    _logger.Error(ex, "An exception occurred while drawing the frame.");
+                    _logger.LogError(ex, "An exception occurred while drawing the frame.");
                 }
-            });
+            }, ct: token);
         }
 
         _cts?.Cancel();
         _cts = new CancellationTokenSource();
 
         Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(
-            RenderOnRenderThread,
+            () => RenderOnRenderThread(_cts.Token),
             Avalonia.Threading.DispatcherPriority.Background,
             _cts.Token);
     }
 
     private void UpdateCurrentFrame(TimeSpan timeSpan)
     {
+        QueueRender();
+
         if (Scene == null) return;
-        if (Scene.CurrentFrame != timeSpan)
+
+        if (_editViewModel.CurrentTime.Value != timeSpan)
         {
-            int rate = Project.GetFrameRate();
-            timeSpan = timeSpan.RoundToRate(rate);
+            //int rate = Project.GetFrameRate();
+            //timeSpan = timeSpan.FloorToRate(rate);
 
-            if (timeSpan >= Scene.Duration)
-            {
-                timeSpan = Scene.Duration - TimeSpan.FromSeconds(1d / rate);
-                timeSpan = timeSpan.RoundToRate(rate);
-            }
+            //if (timeSpan >= Scene.Duration)
+            //{
+            //    timeSpan = Scene.Duration - TimeSpan.FromSeconds(1d / rate);
+            //}
+            //if (timeSpan < TimeSpan.Zero)
+            //{
+            //    timeSpan = TimeSpan.Zero;
+            //}
 
-            Scene.CurrentFrame = timeSpan;
+            _editViewModel.CurrentTime.Value = timeSpan;
         }
     }
 
@@ -541,6 +651,7 @@ public sealed class PlayerViewModel : IDisposable
     {
         Pause();
         _disposables.Dispose();
+        _currentFrameSubscription?.Dispose();
         PreviewInvalidated = null;
         Scene = null!;
     }
@@ -563,7 +674,7 @@ public sealed class PlayerViewModel : IDisposable
         return RenderThread.Dispatcher.InvokeAsync(() =>
         {
             if (Scene == null) throw new Exception("Scene is null.");
-            IRenderer renderer = Scene.Renderer;
+            IRenderer renderer = _editViewModel.Renderer.Value;
             PixelSize frameSize = renderer.FrameSize;
             using var root = new DrawableNode(drawable);
             using var dcanvas = new DeferradCanvas(root, frameSize);
@@ -611,7 +722,7 @@ public sealed class PlayerViewModel : IDisposable
         return RenderThread.Dispatcher.InvokeAsync(() =>
         {
             if (Scene == null) throw new Exception("Scene is null.");
-            IRenderer renderer = Scene.Renderer;
+            IRenderer renderer = _editViewModel.Renderer.Value;
 
             RenderCacheContext? cacheContext = renderer.GetCacheContext();
             RenderCacheOptions? restoreCacheOptions = null;

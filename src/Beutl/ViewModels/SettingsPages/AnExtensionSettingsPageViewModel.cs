@@ -9,8 +9,10 @@ using Reactive.Bindings;
 
 namespace Beutl.ViewModels.SettingsPages;
 
-public sealed class AnExtensionSettingsPageViewModel : PageContext
+public sealed class AnExtensionSettingsPageViewModel : PageContext, IPropertyEditorContextVisitor, IServiceProvider
 {
+    private readonly CommandRecorder _recorder = new();
+
     public AnExtensionSettingsPageViewModel(Extension extension)
     {
         Extension = extension;
@@ -28,6 +30,20 @@ public sealed class AnExtensionSettingsPageViewModel : PageContext
     public AsyncReactiveCommand NavigateParent { get; } = new();
 
     public CoreList<IPropertyEditorContext?> Properties { get; } = [];
+
+    public object? GetService(Type serviceType)
+    {
+        if (serviceType == typeof(CommandRecorder))
+        {
+            return _recorder;
+        }
+
+        return null;
+    }
+
+    public void Visit(IPropertyEditorContext context)
+    {
+    }
 
     private void InitializeCoreObject(ExtensionSettings obj, Func<CoreProperty, CorePropertyMetadata, bool>? predicate = null)
     {
@@ -55,6 +71,7 @@ public sealed class AnExtensionSettingsPageViewModel : PageContext
                 if (extension.TryCreateContextForSettings(foundItems, out IPropertyEditorContext? context))
                 {
                     tempItems.Add(context);
+                    context.Accept(this);
                 }
 
                 props.RemoveMany(foundItems);

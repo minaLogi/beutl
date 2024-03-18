@@ -1,6 +1,8 @@
-﻿using System.Runtime.CompilerServices;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
+using Beutl.Language;
 using Beutl.Media;
 using Beutl.Media.Pixel;
 using Beutl.Rendering;
@@ -38,18 +40,21 @@ public class ChromaKey : FilterEffect
         AffectsRender<ChromaKey>(ColorProperty, HueRangeProperty, SaturationRangeProperty);
     }
 
+    [Display(Name = nameof(Strings.Color), ResourceType = typeof(Strings))]
     public Color Color
     {
         get => _color;
         set => SetAndRaise(ColorProperty, ref _color, value);
     }
 
+    [Display(Name = nameof(Strings.HueRange), ResourceType = typeof(Strings))]
     public float HueRange
     {
         get => _hueRange;
         set => SetAndRaise(HueRangeProperty, ref _hueRange, value);
     }
 
+    [Display(Name = nameof(Strings.SaturationRange), ResourceType = typeof(Strings))]
     public float SaturationRange
     {
         get => _saturationRange;
@@ -58,7 +63,7 @@ public class ChromaKey : FilterEffect
 
     public override void ApplyTo(FilterEffectContext context)
     {
-        context.Custom((Color.ToHsv(), HueRange, SaturationRange), OnApplyTo, (_, r) => r);
+        context.CustomEffect((Color.ToHsv(), HueRange, SaturationRange), OnApplyTo, (_, r) => r);
     }
 
     private static unsafe void CopyFromCPU(MemoryBuffer1D<Bgra8888, Stride1D.Dense> source, SKSurface surface, SKImageInfo imageInfo)
@@ -81,15 +86,17 @@ public class ChromaKey : FilterEffect
         source.View.CopyToCPU(ref Unsafe.AsRef<Bgra8888>((void*)bitmap.GetPixels()), source.Length);
     }
 
-    private unsafe void OnApplyTo((Hsv hsv, float hueRange, float satRange) data, FilterEffectCustomOperationContext context)
+    private unsafe void OnApplyTo((Hsv hsv, float hueRange, float satRange) data, CustomFilterEffectContext context)
     {
-        if (context.Target.Surface?.Value is { } surface)
+        for (int i = 0; i < context.Targets.Count; i++)
         {
+            var target = context.Targets[i];
+            var surface = target.Surface!.Value;
             Accelerator accelerator = SharedGPUContext.Accelerator;
             var kernel = accelerator.LoadAutoGroupedStreamKernel<
                 Index1D, ArrayView<Bgra8888>, Hsv, float, float>(EffectKernel);
 
-            var size = PixelSize.FromSize(context.Target.Size, 1);
+            var size = PixelSize.FromSize(target.Bounds.Size, 1);
             var imgInfo = new SKImageInfo(size.Width, size.Height, SKColorType.Bgra8888);
 
             using var source = accelerator.Allocate1D<Bgra8888>(size.Width * size.Height);

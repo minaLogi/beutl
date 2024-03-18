@@ -8,6 +8,7 @@ using Avalonia.Input.Platform;
 
 using Beutl.Api;
 using Beutl.Api.Services;
+using Beutl.Helpers;
 using Beutl.Services;
 using Beutl.Services.PrimitiveImpls;
 using Beutl.Services.StartupTasks;
@@ -154,11 +155,11 @@ public sealed class MainViewModel : BasePageViewModel
 
         if (installs.Length > 0 || uninstalls.Length > 0)
         {
-            const string ExeName = "Beutl.PackageTools";
-            var startInfo = new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? $"{ExeName}.exe" : ExeName))
+            var startInfo = new ProcessStartInfo()
             {
                 UseShellExecute = true,
             };
+            DotNetProcess.Configure(startInfo, Path.Combine(AppContext.BaseDirectory, "Beutl.PackageTools.UI"));
 
             if (installs.Length > 0)
             {
@@ -178,8 +179,7 @@ public sealed class MainViewModel : BasePageViewModel
                 }
             }
 
-            startInfo.ArgumentList.Add("--verbose");
-            startInfo.ArgumentList.Add("--stay-open");
+            startInfo.ArgumentList.AddRange(["--session-id", Telemetry.Instance._sessionId]);
 
             if (Debugger.IsAttached)
                 startInfo.ArgumentList.Add("--launch-debugger");

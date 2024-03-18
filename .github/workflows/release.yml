@@ -10,15 +10,17 @@ jobs:
     runs-on: windows-latest
     outputs:
       semVer: ${{ steps.nbgv.outputs.SemVer2 }}
+      simpleVer: ${{ steps.nbgv.outputs.SimpleVersion }}
+      revision: ${{ steps.nbgv.outputs.VersionRevision }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Nerdbank.GitVersioning
         id: nbgv
-        uses: dotnet/nbgv@v0.4.1
+        uses: dotnet/nbgv@v0.4.2
 
   build-executable:
     needs: [determine-version]
@@ -29,11 +31,11 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Setup .NET
-        uses: actions/setup-dotnet@v3
+        uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
 
@@ -43,11 +45,36 @@ jobs:
       - name: Publish
         run: ./build.cmd Publish --runtime ${{matrix.rid}} --skip Restore
 
+      - if: ${{ matrix.rid == 'linux_x64' }}
+        name: Download libOpenCvSharpExtern.so
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $Packages = dotnet list src/Beutl.Engine/Beutl.Engine.csproj package --framework net8.0 --format json
+          
+          #4.9.0.2024
+          $OpenCvSharpVersion = (echo $Packages | jq -r '.projects[0].frameworks[0].topLevelPackages | map(select(.id == "OpenCvSharp4"))[0].requestedVersion')
+          
+          #4.9.0
+          $OpenCvVersion = [System.String]::Join('.', [System.Linq.Enumerable]::Take($OpenCvSharpVersion.Split('.'), 3))
+
+          #GitのタグとNuGetのバージョンが違う場合があるので
+          $Filter = 'map(select(.tag_name | startswith("'+$OpenCvVersion+'")))[0].tag_name'
+          $OpenCvSharpTag = (gh api -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" /repos/shimat/opencvsharp/releases | jq -r $Filter)
+
+          #ダウンロード
+          $Release = (gh api -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" /repos/indigo-san/opencvsharp-extern-builds/releases/tags/$OpenCvSharpTag)
+          $AssetId = (echo $Release | jq '.assets | map(select(.name == "libOpenCvSharpExtern.so"))[0].id')
+
+          cd output/Beutl
+          gh api -H "Accept: application/octet-stream" -H "X-GitHub-Api-Version: 2022-11-28" /repos/indigo-san/opencvsharp-extern-builds/releases/assets/$AssetId > libOpenCvSharpExtern.so
+
       - name: Zip
         run: ./build.cmd Zip --runtime ${{matrix.rid}} --skip Publish
 
       - name: Save
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: beutl-${{matrix.rid}}-${{needs.determine-version.outputs.semVer}}
           path: ./artifacts/*.zip
@@ -58,16 +85,16 @@ jobs:
     
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v3
+        uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
           
-      - uses: actions/download-artifact@v3
+      - uses: actions/download-artifact@v4
         with:
           name: beutl-win_x64-${{needs.determine-version.outputs.semVer}}
           path: artifacts
@@ -82,10 +109,72 @@ jobs:
         run: ./build.cmd BuildInstaller --skip Publish
 
       - name: Save installer
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: beutl-setup
           path: ./artifacts/beutl-setup.exe
+  
+  build-debian-package:
+    needs: [determine-version, build-executable]
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+          
+      - uses: actions/download-artifact@v4
+        with:
+          name: beutl-linux_x64-${{needs.determine-version.outputs.semVer}}
+          path: artifacts
+
+      - name: Extract zip
+        run: |
+          cd packages/ubuntu22.04_amd64/usr
+          mkdir -p lib/beutl
+          cd lib/beutl
+          unzip ${{ github.workspace }}/artifacts/Beutl-linux-x64-${{needs.determine-version.outputs.semVer}}.zip
+
+      - name: Change mode
+        run: |
+          cd packages/ubuntu22.04_amd64/usr/lib/beutl
+          chmod +x Beutl
+          chmod +x Beutl.ExceptionHandler
+          chmod +x Beutl.PackageTools
+          chmod +x Beutl.WaitingDialog
+
+      - name: Symbolic Link
+        run: |
+          cd packages/ubuntu22.04_amd64
+          mkdir usr/bin
+          ln -s /usr/lib/beutl/Beutl usr/bin/beutl
+          ln -s /usr/lib/beutl/Beutl.PackageTools usr/bin/beutl-pkg
+
+      - name: Set Version
+        run: |
+           cd packages/ubuntu22.04_amd64/DEBIAN
+           echo "Version: ${{needs.determine-version.outputs.simpleVer}}-${{needs.determine-version.outputs.revision}}ubuntu22.04" >> control
+
+      - name: Set Installed-Size
+        run: |
+           SizeInKiloBytes=`du -s -k packages/ubuntu22.04_amd64 | awk '{print $1}'`
+           cd packages/ubuntu22.04_amd64/DEBIAN
+           echo "Installed-Size: $SizeInKiloBytes" >> control
+
+      - name: Build package
+        run: |
+          cd packages
+          fakeroot dpkg-deb --build ubuntu22.04_amd64 .
+
+      - name: Save package
+        uses: actions/upload-artifact@v4
+        with:
+          name: beutl_${{needs.determine-version.outputs.simpleVer}}-${{needs.determine-version.outputs.revision}}ubuntu22.04_amd64.deb
+          path: ./packages/beutl_${{needs.determine-version.outputs.simpleVer}}-${{needs.determine-version.outputs.revision}}ubuntu22.04_amd64.deb
 
   build-nuget:
     needs: [determine-version]
@@ -93,11 +182,11 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Setup .NET
-        uses: actions/setup-dotnet@v3
+        uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
 
@@ -105,27 +194,27 @@ jobs:
         run: ./build.cmd Restore
   
       - name: Build & Pack
-        run: dotnet pack --no-restore -c Release --output ../../artifacts
+        run: dotnet pack --no-restore -f net8.0 -c Release --output ../../artifacts
         working-directory: ./packages/Beutl.Sdk
 
       - name: Save
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: Beutl.Sdk.${{needs.determine-version.outputs.semVer}}
           path: ./artifacts/Beutl.Sdk.${{needs.determine-version.outputs.semVer}}.nupkg
 
   create-release:
-    needs: [build-executable, build-nuget]
+    needs: [build-executable, build-windows-installer, build-debian-package, build-nuget]
     runs-on: windows-latest
     steps:
-      - uses: actions/download-artifact@v3
+      - uses: actions/download-artifact@v4
         with:
           path: artifacts
 
       - uses: ncipollo/release-action@v1
         id: create_release
         with:
-          artifacts: "artifacts/**/*.zip,artifacts/**/*.nupkg,artifacts/beutl-setup.exe"
+          artifacts: "artifacts/**/*.zip,artifacts/**/*.nupkg,artifacts/**/*.deb,artifacts/beutl-setup.exe"
           draft: true
           makeLatest: true
           generateReleaseNotes: true

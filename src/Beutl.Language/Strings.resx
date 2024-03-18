@@ -352,7 +352,7 @@
     <value>Font Weight</value>
   </data>
   <data name="CharactorSpacing" xml:space="preserve">
-    <value>Charactor Spacing</value>
+    <value>Character Spacing</value>
   </data>
   <data name="Margin" xml:space="preserve">
     <value>Margin</value>
@@ -898,9 +898,6 @@ and b-editor maintains the download URL.</value>
   <data name="Unsupported" xml:space="preserve">
     <value>Unsupported</value>
   </data>
-  <data name="EnableRenderingCache" xml:space="preserve">
-    <value>Enable rendering cache</value>
-  </data>
   <data name="TimelineZoom" xml:space="preserve">
     <value>Zoom</value>
   </data>
@@ -1014,5 +1011,143 @@ and b-editor maintains the download URL.</value>
   </data>
   <data name="AlwaysDisplay" xml:space="preserve">
     <value>Always display</value>
+  </data>
+  <data name="MemoryUsage" xml:space="preserve">
+    <value>Memory usage</value>
+  </data>
+  <data name="Locked" xml:space="preserve">
+    <value>Locked</value>
+  </data>
+  <data name="Unlocked" xml:space="preserve">
+    <value>Unlocked</value>
+  </data>
+  <data name="DeleteAll" xml:space="preserve">
+    <value>Delete All</value>
+  </data>
+  <data name="Lock" xml:space="preserve">
+    <value>Lock</value>
+  </data>
+  <data name="Unlock" xml:space="preserve">
+    <value>Unlock</value>
+  </data>
+  <data name="FrameCache" xml:space="preserve">
+    <value>Frame cache</value>
+  </data>
+  <data name="RightClickToOperateCache" xml:space="preserve">
+    <value>Right-click to operate cache</value>
+  </data>
+  <data name="Brush" xml:space="preserve">
+    <value>Brush</value>
+  </data>
+  <data name="Pen_DashArray" xml:space="preserve">
+    <value>Dashes and spaces</value>
+  </data>
+  <data name="Pen_DashOffset" xml:space="preserve">
+    <value>Dashed offset</value>
+  </data>
+  <data name="Pen_MiterLimit" xml:space="preserve">
+    <value>Miter Limit</value>
+  </data>
+  <data name="Pen_StrokeCap" xml:space="preserve">
+    <value>Cap style</value>
+  </data>
+  <data name="StrokeCap_Flat" xml:space="preserve">
+    <value>Flat</value>
+  </data>
+  <data name="StrokeCap_Round" xml:space="preserve">
+    <value>Round</value>
+  </data>
+  <data name="StrokeCap_Square" xml:space="preserve">
+    <value>Square</value>
+  </data>
+  <data name="Pen_StrokeJoin" xml:space="preserve">
+    <value>Join style</value>
+  </data>
+  <data name="StrokeJoin_Miter" xml:space="preserve">
+    <value>Mitered join</value>
+  </data>
+  <data name="StrokeJoin_Round" xml:space="preserve">
+    <value>Circular join</value>
+  </data>
+  <data name="StrokeJoin_Bevel" xml:space="preserve">
+    <value>Beveled join</value>
+  </data>
+  <data name="Pen_StrokeAlignment" xml:space="preserve">
+    <value>Location</value>
+  </data>
+  <data name="StrokeAlignment_Center" xml:space="preserve">
+    <value>Center</value>
+  </data>
+  <data name="StrokeAlignment_Inside" xml:space="preserve">
+    <value>Inside</value>
+  </data>
+  <data name="StrokeAlignment_Outside" xml:space="preserve">
+    <value>Outside</value>
+  </data>
+  <data name="Stroke" xml:space="preserve">
+    <value>Stroke</value>
+  </data>
+  <data name="HueRange" xml:space="preserve">
+    <value>Hue Range</value>
+  </data>
+  <data name="SaturationRange" xml:space="preserve">
+    <value>Saturation Range</value>
+  </data>
+  <data name="BrightnessRange" xml:space="preserve">
+    <value>Brightness Range</value>
+  </data>
+  <data name="Length" xml:space="preserve">
+    <value>Length</value>
+  </data>
+  <data name="SplitEquallyEffect" xml:space="preserve">
+    <value>Split equally</value>
+  </data>
+  <data name="SplitByPartsEffect" xml:space="preserve">
+    <value>Split by parts</value>
+  </data>
+  <data name="HorizontalDivisions" xml:space="preserve">
+    <value>Horizontal divisions</value>
+  </data>
+  <data name="VerticalDivisions" xml:space="preserve">
+    <value>Vertical divisions</value>
+  </data>
+  <data name="HorizontalSpacing" xml:space="preserve">
+    <value>Horizontal spacing</value>
+  </data>
+  <data name="VerticalSpacing" xml:space="preserve">
+    <value>Vertical spacing</value>
+  </data>
+  <data name="SplitByCharacters" xml:space="preserve">
+    <value>Split by characters</value>
+  </data>
+  <data name="Linear" xml:space="preserve">
+    <value>Linear</value>
+  </data>
+  <data name="Conical" xml:space="preserve">
+    <value>Conical</value>
+  </data>
+  <data name="Radial" xml:space="preserve">
+    <value>Radial</value>
+  </data>
+  <data name="Red" xml:space="preserve">
+    <value>Red</value>
+  </data>
+  <data name="Green" xml:space="preserve">
+    <value>Green</value>
+  </data>
+  <data name="Blue" xml:space="preserve">
+    <value>Blue</value>
+  </data>
+  <data name="Hue" xml:space="preserve">
+    <value>Hue</value>
+  </data>
+  <data name="Saturation" xml:space="preserve">
+    <value>Saturation</value>
+  </data>
+  <data name="ShowSliders" xml:space="preserve">
+    <value>Show sliders</value>
+  </data>
+  <data name="ShowRing" xml:space="preserve">
+    <value>Show ring</value>
   </data>
 </root>

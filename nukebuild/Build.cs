@@ -68,6 +68,14 @@ partial class Build : NukeBuild
                 .EnableNoRestore());
         });
 
+    private string GetTFM()
+    {
+        AbsolutePath mainProj = SourceDirectory / "Beutl" / "Beutl.csproj";
+        using IProcess proc = StartProcess(DotNetPath, $"msbuild --getProperty:TargetFrameworks {mainProj}");
+        proc.WaitForExit();
+        return proc.Output.First().Text.Split(';')[0];
+    }
+
     Target Publish => _ => _
         //.DependsOn(Compile)
         .DependsOn(Restore)
@@ -81,9 +89,13 @@ partial class Build : NukeBuild
             AbsolutePath mainProj = SourceDirectory / "Beutl" / "Beutl.csproj";
             AbsolutePath mainOutput = OutputDirectory / "Beutl";
 
+            string tfm = GetTFM();
+
             DotNetPublish(s => s
                 .EnableNoRestore()
                 .When(Runtime != null, s => s.SetRuntime(Runtime).SetSelfContained(SelfContained))
+                .When(Runtime == DotNetRuntimeIdentifier.win_x64, s => s.SetFramework($"{tfm}-windows"))
+                .When(Runtime != DotNetRuntimeIdentifier.win_x64, s => s.SetFramework(tfm))
                 .SetConfiguration(Configuration)
                 .SetProject(mainProj)
                 .SetOutput(mainOutput)
@@ -93,6 +105,7 @@ partial class Build : NukeBuild
             [
                 "Beutl.ExceptionHandler",
                 "Beutl.PackageTools",
+                "Beutl.PackageTools.UI",
                 "Beutl.WaitingDialog",
             ];
             foreach (string item in subProjects)
@@ -100,12 +113,14 @@ partial class Build : NukeBuild
                 AbsolutePath output = OutputDirectory / item;
                 DotNetPublish(s => s
                     .When(Runtime != null, s => s.SetRuntime(Runtime).SetSelfContained(SelfContained))
+                    .When(Runtime == DotNetRuntimeIdentifier.win_x64, s => s.SetFramework($"{tfm}-windows"))
+                    .When(Runtime != DotNetRuntimeIdentifier.win_x64, s => s.SetFramework(tfm))
                     .EnableNoRestore()
                     .SetConfiguration(Configuration)
                     .SetProject(SourceDirectory / item / $"{item}.csproj")
                     .SetOutput(output));
 
-                output.GlobFiles($"**/{item}.*")
+                output.GlobFiles($"**/{item}*")
                     .Select(p => (Source: p, Target: mainOutput / output.GetRelativePathTo(p)))
                     .ForEach(t => CopyFile(t.Source, t.Target));
             }

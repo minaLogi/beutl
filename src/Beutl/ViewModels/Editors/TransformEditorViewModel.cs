@@ -123,10 +123,12 @@ public sealed class TransformEditorViewModel : ValueEditorViewModel<ITransform?>
         IsEnabled.Skip(1)
             .Subscribe(v =>
             {
-                if (Value.Value is Transform transform)
+                if (Value.Value is Transform transform && transform.IsEnabled != v)
                 {
-                    var command = new ChangePropertyCommand<bool>(transform, Transform.IsEnabledProperty, v, !v);
-                    command.DoAndRecord(CommandRecorder.Default);
+                    CommandRecorder recorder = this.GetRequiredService<CommandRecorder>();
+                    RecordableCommands.Edit(transform, Transform.IsEnabledProperty, v, !v)
+                        .WithStoables(GetStorables())
+                        .DoAndRecord(recorder);
                 }
             })
             .DisposeWith(Disposables);
@@ -188,10 +190,11 @@ public sealed class TransformEditorViewModel : ValueEditorViewModel<ITransform?>
         if (Value.Value is TransformGroup group
             && CreateTransform(type) is { } obj)
         {
+            CommandRecorder recorder = this.GetRequiredService<CommandRecorder>();
             group.Children.BeginRecord<ITransform>()
                 .Add(obj)
-                .ToCommand()
-                .DoAndRecord(CommandRecorder.Default);
+                .ToCommand(GetStorables())
+                .DoAndRecord(recorder);
         }
     }
 

@@ -1,13 +1,17 @@
-﻿using System.Numerics;
+﻿using System.ComponentModel;
+using System.Numerics;
 using System.Text.Json.Nodes;
 using System.Windows.Input;
 
 using Avalonia.Input;
+using Avalonia.Threading;
 
 using Beutl.Animation;
 using Beutl.Api.Services;
+using Beutl.Configuration;
 using Beutl.Graphics.Transformation;
 using Beutl.Helpers;
+using Beutl.Logging;
 using Beutl.Media;
 using Beutl.Media.Decoding;
 using Beutl.Media.Source;
@@ -20,9 +24,10 @@ using Beutl.Services;
 using Beutl.Services.PrimitiveImpls;
 using Beutl.ViewModels.Tools;
 
-using Reactive.Bindings;
+using Microsoft.Extensions.Logging;
 
-using Serilog;
+using Reactive.Bindings;
+using Reactive.Bindings.Extensions;
 
 using LibraryService = Beutl.Services.LibraryService;
 
@@ -41,9 +46,9 @@ public sealed class ToolTabViewModel(IToolContext context) : IDisposable
     }
 }
 
-public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, ISupportCloseAnimation
+public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, ISupportCloseAnimation, ISupportAutoSaveEditorContext
 {
-    private static readonly ILogger s_logger = Log.ForContext<EditViewModel>();
+    private readonly ILogger _logger = Log.CreateLogger<EditViewModel>();
     private readonly CompositeDisposable _disposables = [];
     // Telemetryで使う
     private readonly string _sceneId;
@@ -52,11 +57,32 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
     {
         Scene = scene;
         _sceneId = scene.Id.ToString();
+        CurrentTime = new ReactivePropertySlim<TimeSpan>()
+            .DisposeWith(_disposables);
+        Renderer = scene.GetObservable(Scene.FrameSizeProperty).Select(_ => new SceneRenderer(Scene))
+            .DisposePreviousValue()
+            .ToReadOnlyReactivePropertySlim()
+            .DisposeWith(_disposables)!;
+        Composer = Renderer.Select(v => new SceneComposer(Scene, v))
+            .DisposePreviousValue()
+            .ToReadOnlyReactivePropertySlim()
+            .DisposeWith(_disposables)!;
+
         Library = new LibraryViewModel(this)
             .DisposeWith(_disposables);
         Player = new PlayerViewModel(this)
             .DisposeWith(_disposables);
         Commands = new KnownCommandsImpl(scene, this);
+        CommandRecorder = new CommandRecorder();
+        EditorConfig config = GlobalConfiguration.Instance.EditorConfig;
+
+        FrameCacheManager = scene.GetObservable(Scene.FrameSizeProperty)
+            .Select(v => new FrameCacheManager(v, CreateFrameCacheOptions()) { IsEnabled = config.IsFrameCacheEnabled })
+            .ToReadOnlyReactivePropertySlim()
+            .DisposeWith(_disposables)!;
+
+        config.PropertyChanged += OnEditorConfigPropertyChanged;
+
         SelectedObject = new ReactiveProperty<CoreObject?>()
             .DisposeWith(_disposables);
 
@@ -65,6 +91,8 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
 
         Scale = Options.Select(o => o.Scale);
         Offset = Options.Select(o => o.Offset);
+        BufferStatus = new BufferStatusViewModel(this)
+            .DisposeWith(_disposables);
 
         RestoreState();
 
@@ -85,6 +113,89 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
             .ToReadOnlyReactivePropertySlim();
 
         KeyBindings = CreateKeyBindings();
+
+        CommandRecorder.Executed += OnCommandRecorderExecuted;
+    }
+
+    private static FrameCacheOptions CreateFrameCacheOptions()
+    {
+        EditorConfig config = GlobalConfiguration.Instance.EditorConfig;
+        return new FrameCacheOptions(Scale: (FrameCacheScale)config.FrameCacheScale, ColorType: (FrameCacheColorType)config.FrameCacheColorType);
+    }
+
+    private void OnEditorConfigPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (sender is EditorConfig config)
+        {
+            if (e.PropertyName is nameof(EditorConfig.FrameCacheColorType) or nameof(EditorConfig.FrameCacheScale))
+            {
+                FrameCacheManager.Value.Options = FrameCacheManager.Value.Options with
+                {
+                    ColorType = (FrameCacheColorType)config.FrameCacheColorType,
+                    Scale = (FrameCacheScale)config.FrameCacheScale
+                };
+            }
+            else if (e.PropertyName is nameof(EditorConfig.IsFrameCacheEnabled))
+            {
+                FrameCacheManager.Value.IsEnabled = config.IsFrameCacheEnabled;
+                if (!config.IsFrameCacheEnabled)
+                {
+                    FrameCacheManager.Value.Clear();
+                }
+            }
+            else if (e.PropertyName is nameof(EditorConfig.IsNodeCacheEnabled)
+                or nameof(EditorConfig.NodeCacheMaxPixels)
+                or nameof(EditorConfig.NodeCacheMinPixels))
+            {
+                Rendering.Cache.RenderCacheContext? cacheContext = Renderer.Value.GetCacheContext();
+                if (cacheContext != null)
+                {
+                    cacheContext.CacheOptions = Rendering.Cache.RenderCacheOptions.CreateFromGlobalConfiguration();
+                }
+            }
+        }
+    }
+
+    private void OnCommandRecorderExecuted(object? sender, CommandExecutedEventArgs e)
+    {
+        Task.Run(() =>
+        {
+            int rate = Player.GetFrameRate();
+            IEnumerable<TimeRange> affectedRange = e.Command is IAffectsTimelineCommand affectsTimeline
+                ? affectsTimeline.GetAffectedRange()
+                : e.Storables.OfType<Element>().Select(v => v.Range);
+
+            FrameCacheManager.Value.DeleteAndUpdateBlocks(affectedRange
+                .Select(item => (Start: (int)item.Start.ToFrameNumber(rate), End: (int)Math.Ceiling(item.End.ToFrameNumber(rate)))));
+        });
+
+        if (GlobalConfiguration.Instance.EditorConfig.IsAutoSaveEnabled)
+        {
+            Dispatcher.UIThread.Invoke(() =>
+            {
+                foreach (IStorable item in e.Storables)
+                {
+                    try
+                    {
+                        item.Save(item.FileName);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "An exception occurred while saving the file.");
+                        NotificationService.ShowError(string.Empty, Message.An_exception_occurred_while_saving_the_file);
+                    }
+                }
+
+                try
+                {
+                    SaveState();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "An exception occurred while saving the view state.");
+                }
+            });
+        }
     }
 
     private void OnSelectedObjectDetachedFromHierarchy(object? sender, HierarchyAttachmentEventArgs e)
@@ -93,6 +204,12 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
     }
 
     public Scene Scene { get; private set; }
+
+    public ReactivePropertySlim<TimeSpan> CurrentTime { get; }
+
+    public ReadOnlyReactivePropertySlim<SceneRenderer> Renderer { get; }
+
+    public ReadOnlyReactivePropertySlim<SceneComposer> Composer { get; }
 
     public LibraryViewModel Library { get; private set; }
 
@@ -107,6 +224,12 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
     public ReadOnlyReactivePropertySlim<int?> SelectedLayerNumber { get; }
 
     public PlayerViewModel Player { get; private set; }
+
+    public BufferStatusViewModel BufferStatus { get; private set; }
+
+    public CommandRecorder CommandRecorder { get; private set; }
+
+    public ReadOnlyReactivePropertySlim<FrameCacheManager> FrameCacheManager { get; private set; }
 
     public EditorExtension Extension => SceneEditorExtension.Instance;
 
@@ -126,12 +249,14 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
 
     public void Dispose()
     {
+        GlobalConfiguration.Instance.EditorConfig.PropertyChanged -= OnEditorConfigPropertyChanged;
         SaveState();
         _disposables.Dispose();
         Options.Dispose();
         IsEnabled.Dispose();
         Library = null!;
         Player = null!;
+        BufferStatus = null!;
 
         foreach (ToolTabViewModel item in BottomTabItems.GetMarshal().Value)
         {
@@ -148,6 +273,11 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
 
         Scene = null!;
         Commands = null!;
+        CommandRecorder.Executed -= OnCommandRecorderExecuted;
+        CommandRecorder.Clear();
+        CommandRecorder = null!;
+        FrameCacheManager.Dispose();
+        FrameCacheManager = null!;
     }
 
     public T? FindToolTab<T>(Func<T, bool> condition)
@@ -198,8 +328,7 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
 
     public bool OpenToolTab(IToolContext item)
     {
-        Telemetry.ToolTabOpened(item.Extension.Name, _sceneId);
-        s_logger.Information("OpenToolTab {ToolName}", item.Extension.Name);
+        _logger.LogInformation("'{ToolTabName}' has been opened. ({SceneId})", item.Extension.Name, _sceneId);
         try
         {
             if (BottomTabItems.Any(x => x.Context == item) || RightTabItems.Any(x => x.Context == item))
@@ -223,15 +352,14 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
         }
         catch (Exception ex)
         {
-            Telemetry.Exception(ex);
-            s_logger.Error(ex, "Failed to OpenToolTab.");
+            _logger.LogError(ex, "Failed to OpenToolTab.");
             return false;
         }
     }
 
     public void CloseToolTab(IToolContext item)
     {
-        s_logger.Information("CloseToolTab {ToolName}", item.Extension.Name);
+        _logger.LogInformation("CloseToolTab {ToolName}", item.Extension.Name);
         try
         {
             if (BottomTabItems.FirstOrDefault(x => x.Context == item) is { } found0)
@@ -247,8 +375,7 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
         }
         catch (Exception ex)
         {
-            Telemetry.Exception(ex);
-            s_logger.Error(ex, "Failed to CloseToolTab.");
+            _logger.LogError(ex, "Failed to CloseToolTab.");
         }
     }
 
@@ -324,6 +451,8 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
         }
 
         json["right-items"] = rightItems;
+
+        json["current-time"] = JsonValue.Create(CurrentTime.Value);
 
         json.JsonSave(Path.Combine(viewStateDir, $"{Path.GetFileNameWithoutExtension(EdittingFile)}.config"));
     }
@@ -436,6 +565,12 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
                     RightTabItems[index].Context.IsSelected.Value = true;
                 }
             }
+
+            if (jsonObject.TryGetPropertyValueAsJsonValue("current-time", out string? currentTimeStr)
+                && TimeSpan.TryParse(currentTimeStr, out TimeSpan currentTime))
+            {
+                CurrentTime.Value = currentTime;
+            }
         }
         else
         {
@@ -461,6 +596,9 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
 
         if (serviceType.IsAssignableTo(typeof(ISupportCloseAnimation)))
             return this;
+
+        if (serviceType == typeof(CommandRecorder))
+            return CommandRecorder;
 
         return null;
     }
@@ -490,14 +628,22 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
                 if (op.Properties.FirstOrDefault(v => v.PropertyType == typeof(ITransform)) is IAbstractProperty<ITransform?> transformp)
                 {
                     ITransform? transform = transformp.GetValue();
-                    AddOrSetHelper.AddOrSet(ref transform, new TranslateTransform(desc.Position));
+                    AddOrSetHelper.AddOrSet(
+                        ref transform,
+                        new TranslateTransform(desc.Position),
+                        [operation.FindHierarchicalParent<IStorable>()],
+                        CommandRecorder);
                     transformp.SetValue(transform);
                 }
                 else
                 {
                     var configure = new ConfigureTransformOperator();
                     ITransform? transform = configure.Transform.Value;
-                    AddOrSetHelper.AddOrSet(ref transform, new TranslateTransform(desc.Position));
+                    AddOrSetHelper.AddOrSet(
+                        ref transform,
+                        new TranslateTransform(desc.Position),
+                        [operation.FindHierarchicalParent<IStorable>()],
+                        CommandRecorder);
                     configure.Transform.Value = transform;
                     operation.Children.Add(configure);
                 }
@@ -513,7 +659,7 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
                 where T : SourceOperator, new()
             {
                 Element element = CreateElement();
-                element.Name = Path.GetFileName(desc.FileName!);
+                element.Name = Path.GetFileName(desc.FileName);
                 SetAccentColor(element, typeof(T).FullName!);
 
                 element.Operation.AddChild(t = new T()).Do();
@@ -571,7 +717,7 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
 
             list.ToArray()
                 .ToCommand()
-                .DoAndRecord(CommandRecorder.Default);
+                .DoAndRecord(CommandRecorder);
 
             if (scrollPos.HasValue && timeline != null)
             {
@@ -598,7 +744,7 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
             }
 
             element.Save(element.FileName);
-            Scene.AddChild(element).DoAndRecord(CommandRecorder.Default);
+            Scene.AddChild(element).DoAndRecord(CommandRecorder);
 
             timeline?.ScrollTo.Execute((element.Range, element.ZIndex));
         }
@@ -722,14 +868,14 @@ public sealed class EditViewModel : IEditorContext, ITimelineOptionsProvider, IS
 
         public ValueTask<bool> OnUndo()
         {
-            CommandRecorder.Default.Undo();
+            viewModel.CommandRecorder.Undo();
 
             return ValueTask.FromResult(true);
         }
 
         public ValueTask<bool> OnRedo()
         {
-            CommandRecorder.Default.Redo();
+            viewModel.CommandRecorder.Redo();
 
             return ValueTask.FromResult(true);
         }

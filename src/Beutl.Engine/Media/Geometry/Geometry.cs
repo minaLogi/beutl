@@ -1,8 +1,11 @@
 ﻿using Beutl.Animation;
 using Beutl.Graphics;
+using Beutl.Graphics.Rendering;
 using Beutl.Graphics.Transformation;
 
 using SkiaSharp;
+
+using PathOptions = (float Thickness, Beutl.Media.StrokeAlignment Alignment, Beutl.Media.StrokeCap StrokeCap, Beutl.Media.StrokeJoin StrokeJoin, float MiterLimit);
 
 namespace Beutl.Media;
 
@@ -103,12 +106,6 @@ public abstract class Geometry : Animatable, IAffectsRender
 
     public virtual void ApplyTo(IGeometryContext context)
     {
-        if (Transform?.IsEnabled == true)
-        {
-            context.Transform(Transform.Value);
-        }
-
-        context.FillType = _fillType;
     }
 
     private void OnInvalidated(object? sender, RenderInvalidatedEventArgs e)
@@ -123,6 +120,13 @@ public abstract class Geometry : Animatable, IAffectsRender
         {
             _context.Clear();
             ApplyTo(_context);
+            if (Transform?.IsEnabled == true)
+            {
+                _context.Transform(Transform.Value);
+            }
+
+            _context.FillType = _fillType;
+
             _isDirty = false;
             unchecked
             {
@@ -142,56 +146,40 @@ public abstract class Geometry : Animatable, IAffectsRender
     {
         if (pen == null) return false;
 
-        float strokeWidth = pen.Thickness;
-        StrokeAlignment alignment = pen.StrokeAlignment;
-
-        if (!_pathCache.HasCacheFor(strokeWidth, alignment))
+        if (!_pathCache.HasCacheFor(pen))
         {
-            UpdatePathCache(strokeWidth, alignment);
+            UpdatePathCache(pen);
         }
 
         return PathContainsCore(_pathCache.CachedStrokePath, point);
     }
 
-    private void UpdatePathCache(float strokeWidth, StrokeAlignment alignment)
+    internal SKPath? GetStrokePath(IPen? pen)
     {
-        var strokePath = new SKPath();
+        if (pen == null) return null;
 
-        if (Math.Abs(strokeWidth) < float.Epsilon)
+        if (!_pathCache.HasCacheFor(pen))
         {
-            _pathCache.Cache(strokePath, strokeWidth, alignment, Bounds);
+            UpdatePathCache(pen);
+        }
+
+        return _pathCache.CachedStrokePath;
+    }
+
+    private void UpdatePathCache(IPen pen)
+    {
+        Rect bounds = Bounds;
+
+        if (Math.Abs(pen.Thickness) < float.Epsilon)
+        {
+            _pathCache.Cache(new SKPath(), pen, bounds);
         }
         else
         {
-            using (var paint = new SKPaint())
-            {
-                paint.IsStroke = true;
-                SKPath fillPath = GetNativeObject();
+            SKPath fillPath = GetNativeObject();
+            SKPath strokePath = PenHelper.CreateStrokePath(fillPath, pen, bounds);
 
-                switch (alignment)
-                {
-                    case StrokeAlignment.Center:
-                        paint.StrokeWidth = strokeWidth;
-                        paint.GetFillPath(fillPath, strokePath);
-                        break;
-                    case StrokeAlignment.Inside or StrokeAlignment.Outside:
-                        paint.StrokeWidth = strokeWidth * 2;
-                        paint.GetFillPath(fillPath, strokePath);
-
-                        using (var strokePathCopy = new SKPath(strokePath))
-                        {
-                            strokePathCopy.Op(
-                                fillPath,
-                                alignment == StrokeAlignment.Inside ? SKPathOp.Intersect : SKPathOp.Difference,
-                                strokePath);
-                        }
-                        break;
-                    default:
-                        break;
-                }
-            }
-
-            _pathCache.Cache(strokePath, strokeWidth, alignment, strokePath.TightBounds.ToGraphicsRect());
+            _pathCache.Cache(strokePath, pen, strokePath.TightBounds.ToGraphicsRect());
         }
     }
 
@@ -208,37 +196,36 @@ public abstract class Geometry : Animatable, IAffectsRender
         }
         else
         {
-            float strokeWidth = pen.Thickness;
-            StrokeAlignment alignment = pen.StrokeAlignment;
-
-            if (!_pathCache.HasCacheFor(strokeWidth, alignment))
+            if (!_pathCache.HasCacheFor(pen))
             {
-                UpdatePathCache(strokeWidth, alignment);
+                UpdatePathCache(pen);
             }
 
             return _pathCache.CachedGeometryRenderBounds;
         }
     }
 
+    public override void ApplyAnimations(IClock clock)
+    {
+        base.ApplyAnimations(clock);
+        (Transform as IAnimatable)?.ApplyAnimations(clock);
+    }
+
     private struct PathCache
     {
-        private float _cachedStrokeWidth;
-        private StrokeAlignment _cachedStrokeAlignment;
-
-        public const float Tolerance = float.Epsilon;
+        private IPen? _cachedPen;
 
         public SKPath? CachedStrokePath { get; private set; }
 
         public Rect CachedGeometryRenderBounds { get; private set; }
 
-        public readonly bool HasCacheFor(float strokeWidth, StrokeAlignment strokeAlignment)
+        public readonly bool HasCacheFor(IPen pen)
         {
             return CachedStrokePath != null
-                && Math.Abs(_cachedStrokeWidth - strokeWidth) < Tolerance
-                && _cachedStrokeAlignment == strokeAlignment;
+                && EqualityComparer<IPen?>.Default.Equals(_cachedPen, pen);
         }
 
-        public void Cache(SKPath path, float strokeWidth, StrokeAlignment strokeAlignment, Rect geometryRenderBounds)
+        public void Cache(SKPath path, IPen pen, Rect geometryRenderBounds)
         {
             if (CachedStrokePath != path)
             {
@@ -247,8 +234,7 @@ public abstract class Geometry : Animatable, IAffectsRender
 
             CachedStrokePath = path;
             CachedGeometryRenderBounds = geometryRenderBounds;
-            _cachedStrokeWidth = strokeWidth;
-            _cachedStrokeAlignment = strokeAlignment;
+            _cachedPen = (pen as IMutablePen)?.ToImmutable() ?? pen;
         }
 
         public void Invalidate()
@@ -256,8 +242,7 @@ public abstract class Geometry : Animatable, IAffectsRender
             CachedStrokePath?.Dispose();
             CachedStrokePath = null;
             CachedGeometryRenderBounds = default;
-            _cachedStrokeWidth = default;
-            _cachedStrokeAlignment = default;
+            _cachedPen = null;
         }
     }
 }

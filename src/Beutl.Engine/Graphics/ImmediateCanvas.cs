@@ -172,51 +172,35 @@ public partial class ImmediateCanvas : ICanvas, IImmediateCanvasFactory
         if (GetCacheContext() is { } context)
         {
             RenderCache cache = context.GetCache(node);
-            if (node is ISupportRenderCache supportCache)
+            // RenderLayer.Renderでキャッシュの有効性を確認しているのでチェックを省く
+            if (cache.IsCached)
             {
-                supportCache.Accepts(cache);
-
-                if (cache.CanCache())
+                if (node is ISupportRenderCache supportCache)
                 {
-                    if (cache.IsCached)
-                    {
-                        supportCache.RenderWithCache(this, cache);
-                        return;
-                    }
+                    supportCache.RenderWithCache(this, cache);
+                    return;
                 }
-            }
-            else
-            {
-                cache.IncrementRenderCount();
-                if (cache.IsCached)
+                else
                 {
-                    void AcceptsAll(IGraphicNode node)
-                    {
-                        RenderCache cache = context!.GetCache(node);
-                        (node as ISupportRenderCache)?.Accepts(cache);
-                        if (node is ContainerNode c)
-                        {
-                            foreach (IGraphicNode item in c.Children)
-                            {
-                                AcceptsAll(item);
-                            }
-                        }
-                    }
-                    AcceptsAll(node);
-
-                    if (context.CanCacheRecursive(node))
+                    if (cache.CacheCount == 1)
                     {
                         using (Ref<SKSurface> surface = cache.UseCache(out Rect bounds))
                         {
                             DrawSurface(surface.Value, bounds.Position);
                         }
-
-                        return;
                     }
                     else
                     {
-                        cache.Invalidate();
+                        foreach ((Ref<SKSurface> Surface, Rect Bounds) item in cache.UseCache())
+                        {
+                            using (item.Surface)
+                            {
+                                DrawSurface(item.Surface.Value, item.Bounds.Position);
+                            }
+                        }
                     }
+
+                    return;
                 }
             }
         }
@@ -233,7 +217,7 @@ public partial class ImmediateCanvas : ICanvas, IImmediateCanvasFactory
 
         VerifyAccess();
         var size = new Size(bmp.Width, bmp.Height);
-        ConfigureFillPaint(size, fill);
+        ConfigureFillPaint(new(size), fill);
         ConfigureStrokePaint(new Rect(size), pen);
 
         if (bmp is Bitmap<Bgra8888>)
@@ -281,7 +265,7 @@ public partial class ImmediateCanvas : ICanvas, IImmediateCanvasFactory
     public void DrawEllipse(Rect rect, IBrush? fill, IPen? pen)
     {
         VerifyAccess();
-        ConfigureFillPaint(rect.Size, fill);
+        ConfigureFillPaint(rect, fill);
         Canvas.DrawOval(rect.ToSKRect(), _sharedFillPaint);
 
         if (pen != null && pen.Thickness != 0)
@@ -305,7 +289,7 @@ public partial class ImmediateCanvas : ICanvas, IImmediateCanvasFactory
     public void DrawRectangle(Rect rect, IBrush? fill, IPen? pen)
     {
         VerifyAccess();
-        ConfigureFillPaint(rect.Size, fill);
+        ConfigureFillPaint(rect, fill);
         Canvas.DrawRect(rect.ToSKRect(), _sharedFillPaint);
 
         if (pen != null && pen.Thickness != 0)
@@ -326,97 +310,21 @@ public partial class ImmediateCanvas : ICanvas, IImmediateCanvasFactory
         }
     }
 
-    private static SKPath CreateSKPathFromText(ReadOnlySpan<ushort> glyphs, ReadOnlySpan<SKPoint> positions, SKFont font)
-    {
-        var path = new SKPath();
-
-        for (int i = 0; i < glyphs.Length; i++)
-        {
-            ushort glyph = glyphs[i];
-            SKPoint point = positions[i];
-
-            using SKPath glyphPath = font.GetGlyphPath(glyph);
-            path.AddPath(glyphPath, point.X, point.Y);
-        }
-
-        return path;
-    }
-
-    private void DrawTextStroke(FormattedText text, IPen pen, SKTextBlob textBlob,
-        ReadOnlySpan<ushort> glyphs, ReadOnlySpan<SKPoint> positions, SKFont font)
-    {
-        ConfigureStrokePaint(new(text.Bounds), pen!);
-        if (pen.StrokeAlignment == StrokeAlignment.Center)
-        {
-            Canvas.DrawText(textBlob, 0, 0, _sharedStrokePaint);
-        }
-        else
-        {
-            using SKPath path = CreateSKPathFromText(glyphs, positions, font);
-
-            switch (pen!.StrokeAlignment)
-            {
-                case StrokeAlignment.Inside:
-                    Canvas.Save();
-                    Canvas.ClipPath(path, SKClipOperation.Intersect, true);
-                    Canvas.DrawText(textBlob, 0, 0, _sharedStrokePaint);
-                    Canvas.Restore();
-                    break;
-
-                case StrokeAlignment.Outside:
-                    Canvas.Save();
-                    Canvas.ClipPath(path, SKClipOperation.Difference, true);
-                    Canvas.DrawText(textBlob, 0, 0, _sharedStrokePaint);
-                    Canvas.Restore();
-                    break;
-            }
-        }
-    }
-
     public void DrawText(FormattedText text, IBrush? fill, IPen? pen)
     {
         VerifyAccess();
+        SKTextBlob textBlob = text.GetTextBlob();
 
-        var typeface = new Typeface(text.Font, text.Style, text.Weight);
-        SKTypeface sktypeface = typeface.ToSkia();
-        _sharedFillPaint.Reset();
-        _sharedFillPaint.TextSize = text.Size;
-        _sharedFillPaint.Typeface = sktypeface;
-
-        using var shaper = new SKShaper(sktypeface);
-        using var buffer = new HarfBuzzSharp.Buffer();
-        buffer.AddUtf16(text.Text.AsSpan());
-        buffer.GuessSegmentProperties();
-
-        SKShaper.Result result = shaper.Shape(buffer, _sharedFillPaint);
-
-        // create the text blob
-        using var builder = new SKTextBlobBuilder();
-        using SKFont font = _sharedFillPaint.ToFont();
-        SKPositionedRunBuffer run = builder.AllocatePositionedRun(font, result.Codepoints.Length);
-
-        // copy the glyphs
-        Span<ushort> glyphs = run.GetGlyphSpan();
-        Span<SKPoint> positions = run.GetPositionSpan();
-        for (int i = 0; i < result.Codepoints.Length; i++)
-        {
-            glyphs[i] = (ushort)result.Codepoints[i];
-            SKPoint point = result.Points[i];
-            point.X += i * text.Spacing;
-            positions[i] = point;
-        }
-
-        // build
-        using SKTextBlob textBlob = builder.Build();
-
-        // draw filled
         ConfigureFillPaint(text.Bounds, fill);
         Canvas.DrawText(textBlob, 0, 0, _sharedFillPaint);
 
-        // draw stroke
-        if (pen != null && pen.Thickness != 0)
+        if (pen != null
+            && pen.Thickness > 0
+            && text.GetStrokePath() is { }stroke)
         {
-            DrawTextStroke(text, pen, textBlob, glyphs, positions, font);
+            ConfigureStrokePaint(new(text.Bounds.Size), pen!);
+            _sharedStrokePaint.IsStroke = false;
+            Canvas.DrawPath(stroke, _sharedStrokePaint);
         }
     }
 
@@ -426,33 +334,17 @@ public partial class ImmediateCanvas : ICanvas, IImmediateCanvasFactory
 
         if (!strokeOnly)
         {
-            ConfigureFillPaint(rect.Size, fill);
+            ConfigureFillPaint(rect, fill);
             Canvas.DrawPath(skPath, _sharedFillPaint);
         }
 
-        if (pen != null && pen.Thickness != 0)
+        if (pen != null && pen.Thickness > 0)
         {
             ConfigureStrokePaint(rect, pen);
-            switch (pen.StrokeAlignment)
-            {
-                case StrokeAlignment.Center:
-                    Canvas.DrawPath(skPath, _sharedStrokePaint);
-                    break;
 
-                case StrokeAlignment.Inside:
-                    Canvas.Save();
-                    Canvas.ClipPath(skPath, SKClipOperation.Intersect, true);
-                    Canvas.DrawPath(skPath, _sharedStrokePaint);
-                    Canvas.Restore();
-                    break;
-
-                case StrokeAlignment.Outside:
-                    Canvas.Save();
-                    Canvas.ClipPath(skPath, SKClipOperation.Difference, true);
-                    Canvas.DrawPath(skPath, _sharedStrokePaint);
-                    Canvas.Restore();
-                    break;
-            }
+            using SKPath strokePath = PenHelper.CreateStrokePath(skPath, pen, rect);
+            _sharedStrokePaint.IsStroke = false;
+            Canvas.DrawPath(strokePath, _sharedStrokePaint);
         }
     }
 
@@ -460,7 +352,18 @@ public partial class ImmediateCanvas : ICanvas, IImmediateCanvasFactory
     {
         VerifyAccess();
         SKPath skPath = geometry.GetNativeObject();
-        DrawSKPath(skPath, false, fill, pen);
+        Rect rect = geometry.Bounds;
+
+        ConfigureFillPaint(geometry.Bounds, fill);
+        Canvas.DrawPath(skPath, _sharedFillPaint);
+
+        if (pen != null && pen.Thickness > 0)
+        {
+            ConfigureStrokePaint(rect, pen);
+            _sharedStrokePaint.IsStroke = false;
+            SKPath? stroke = geometry.GetStrokePath(pen);
+            Canvas.DrawPath(stroke, _sharedStrokePaint);
+        }
     }
 
     public unsafe Bitmap<Bgra8888> GetBitmap()
@@ -564,7 +467,7 @@ public partial class ImmediateCanvas : ICanvas, IImmediateCanvasFactory
         var paint = new SKPaint();
 
         int count = Canvas.SaveLayer(paint);
-        new BrushConstructor(bounds.Size, mask, (BlendMode)paint.BlendMode, this).ConfigurePaint(paint);
+        new BrushConstructor(bounds, mask, (BlendMode)paint.BlendMode, this).ConfigurePaint(paint);
         _states.Push(new CanvasPushedState.MaskPushedState(count, invert, paint));
         return new PushedState(this, _states.Count);
     }
@@ -612,25 +515,30 @@ public partial class ImmediateCanvas : ICanvas, IImmediateCanvasFactory
         _dispatcher?.VerifyAccess();
     }
 
-    private void ConfigureStrokePaint(Rect rect, IPen? pen)
+    private void ConfigureStrokePaint(Rect bounds, IPen? pen)
     {
         _sharedStrokePaint.Reset();
 
         if (pen != null && pen.Thickness != 0)
         {
+            Rect original = bounds;
             float thickness = pen.Thickness;
+
             switch (pen.StrokeAlignment)
             {
                 case StrokeAlignment.Center:
-                    rect = rect.Inflate(thickness / 2);
+                    bounds = bounds.Inflate(thickness / 2);
                     break;
 
                 case StrokeAlignment.Outside:
-                    rect = rect.Inflate(thickness);
-                    goto case StrokeAlignment.Inside;
+                    bounds = bounds.Inflate(thickness);
+                    thickness *= 2;
+                    break;
 
                 case StrokeAlignment.Inside:
                     thickness *= 2;
+                    float maxAspect = Math.Max(bounds.Width, bounds.Height);
+                    thickness = Math.Min(thickness, maxAspect);
                     break;
 
                 default:
@@ -662,13 +570,13 @@ public partial class ImmediateCanvas : ICanvas, IImmediateCanvasFactory
                 _sharedStrokePaint.PathEffect = pe;
             }
 
-            new BrushConstructor(rect.Size, pen.Brush, BlendMode, this).ConfigurePaint(_sharedStrokePaint);
+            new BrushConstructor(original, pen.Brush, BlendMode, this).ConfigurePaint(_sharedStrokePaint);
         }
     }
 
-    private void ConfigureFillPaint(Size targetSize, IBrush? brush)
+    private void ConfigureFillPaint(Rect bounds, IBrush? brush)
     {
         _sharedFillPaint.Reset();
-        new BrushConstructor(targetSize, brush, BlendMode, this).ConfigurePaint(_sharedFillPaint);
+        new BrushConstructor(bounds, brush, BlendMode, this).ConfigurePaint(_sharedFillPaint);
     }
 }

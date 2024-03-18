@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 
 using Avalonia.Platform.Storage;
 
+using Beutl.Logging;
 using Beutl.Media;
 using Beutl.Media.Encoding;
 using Beutl.Media.Music;
@@ -18,10 +19,9 @@ using Beutl.Utilities;
 using DynamicData;
 
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 using Reactive.Bindings;
-
-using Serilog;
 
 namespace Beutl.ViewModels;
 
@@ -303,7 +303,7 @@ public sealed class AudioOutputViewModel
 
 public sealed class OutputViewModel : IOutputContext
 {
-    private readonly ILogger _logger = Log.ForContext<OutputViewModel>();
+    private readonly ILogger _logger = Log.CreateLogger<OutputViewModel>();
     private readonly ReactiveProperty<bool> _isIndeterminate = new();
     private readonly ReactiveProperty<bool> _isEncoding = new();
     private readonly ReactivePropertySlim<double> _progress = new();
@@ -443,7 +443,7 @@ public sealed class OutputViewModel : IOutputContext
                 else
                 {
                     _isIndeterminate.Value = false;
-                    VideoEncoderSettings videoSettings = VideoSettings.ToSettings(new PixelSize(scene.Width, scene.Height));
+                    VideoEncoderSettings videoSettings = VideoSettings.ToSettings(scene.FrameSize);
                     AudioEncoderSettings audioSettings = AudioSettings.ToSettings();
 
                     TimeSpan duration = scene.Duration;
@@ -458,10 +458,10 @@ public sealed class OutputViewModel : IOutputContext
 
                     try
                     {
-                        IRenderer renderer = scene.Renderer;
+                        using var renderer = new SceneRenderer(scene);
                         OutputVideo(frames, frameRateD, renderer, writer);
 
-                        IComposer composer = scene.Composer;
+                        using var composer = new SceneComposer(scene, renderer);
                         OutputAudio(samples, composer, writer);
                     }
                     finally
@@ -477,9 +477,8 @@ public sealed class OutputViewModel : IOutputContext
         }
         catch (Exception ex)
         {
-            Telemetry.Exception(ex);
             NotificationService.ShowError(Message.An_exception_occurred_during_output, ex.Message);
-            _logger.Error(ex, "An exception occurred during output.");
+            _logger.LogError(ex, "An exception occurred during output.");
         }
         finally
         {
@@ -493,54 +492,43 @@ public sealed class OutputViewModel : IOutputContext
         }
     }
 
-    private void OutputVideo(double frames, double frameRate, IRenderer renderer, MediaWriter writer)
+    private void OutputVideo(double frames, double frameRate, SceneRenderer renderer, MediaWriter writer)
     {
         RenderCacheContext? cacheContext = renderer.GetCacheContext();
-        RenderCacheOptions? restoreCacheOptions = null;
 
         if (cacheContext != null)
         {
-            restoreCacheOptions = cacheContext.CacheOptions;
             cacheContext.CacheOptions = RenderCacheOptions.Disabled;
         }
-        try
+
+        for (double i = 0; i < frames; i++)
         {
-            for (double i = 0; i < frames; i++)
+            if (_lastCts!.IsCancellationRequested)
+                break;
+
+            var ts = TimeSpan.FromSeconds(i / frameRate);
+            int retry = 0;
+        Retry:
+            if (!renderer.Render(ts))
             {
-                if (_lastCts!.IsCancellationRequested)
-                    break;
+                if (retry > 3)
+                    throw new Exception("Renderer.RenderがFalseでした。他にこのシーンを使用していないか確認してください。");
 
-                var ts = TimeSpan.FromSeconds(i / frameRate);
-                int retry = 0;
-            Retry:
-                if (!renderer.Render(ts))
-                {
-                    if (retry > 3)
-                        throw new Exception("Renderer.RenderがFalseでした。他にこのシーンを使用していないか確認してください。");
-
-                    retry++;
-                    goto Retry;
-                }
-                using (Bitmap<Bgra8888> result = renderer.Snapshot())
-                {
-                    writer.AddVideo(result);
-                }
-
-                ProgressValue.Value++;
-                _progress.Value = ProgressValue.Value / ProgressMax.Value;
-                ProgressText.Value = $"{Strings.OutputtingVideo}: {ts:hh\\:mm\\:ss\\.ff}";
+                retry++;
+                goto Retry;
             }
-        }
-        finally
-        {
-            if (cacheContext != null && restoreCacheOptions != null)
+            using (Bitmap<Bgra8888> result = renderer.Snapshot())
             {
-                cacheContext.CacheOptions = restoreCacheOptions;
+                writer.AddVideo(result);
             }
+
+            ProgressValue.Value++;
+            _progress.Value = ProgressValue.Value / ProgressMax.Value;
+            ProgressText.Value = $"{Strings.OutputtingVideo}: {ts:hh\\:mm\\:ss\\.ff}";
         }
     }
 
-    private void OutputAudio(double samples, IComposer composer, MediaWriter writer)
+    private void OutputAudio(double samples, SceneComposer composer, MediaWriter writer)
     {
         for (double i = 0; i < samples; i++)
         {

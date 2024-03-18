@@ -9,11 +9,10 @@ using Azure.Monitor.OpenTelemetry.Exporter;
 
 using Beutl.Configuration;
 
-using Microsoft.ApplicationInsights;
-using Microsoft.ApplicationInsights.Extensibility;
 using Microsoft.Extensions.Logging;
 
 using OpenTelemetry;
+using OpenTelemetry.Logs;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 
@@ -21,31 +20,55 @@ using Serilog;
 
 namespace Beutl.Services;
 
-internal static partial class Telemetry
+internal class Telemetry : IDisposable
 {
-    private static readonly TelemetryClient s_client;
-    private static readonly TelemetryConfiguration s_config;
-    private static TracerProvider? s_tracerProvider;
+    private static readonly KeyValuePair<string, object>[] s_attributes;
+    private readonly TracerProvider? _tracerProvider;
+    private readonly Lazy<ResourceBuilder> _resourceBuilder;
+    internal readonly string _sessionId;
     private const string Instrumentation = "b8cc7df1-1367-41f5-a819-5c95a10075cb";
 
     static Telemetry()
     {
-        s_config = TelemetryConfiguration.CreateDefault();
-        s_config.ConnectionString = $"InstrumentationKey={Instrumentation}";
-        s_client = new TelemetryClient(s_config);
-        s_client.Context.Session.Id = Guid.NewGuid().ToString();
-        s_client.Context.Location.Ip = "N/A";
-        s_client.Context.Cloud.RoleInstance = "N/A";
-        s_client.Context.GlobalProperties.Add("Beutl Version", GitVersionInformation.NuGetVersion);
+        static string GetSystemType()
+        {
+            if (OperatingSystem.IsWindows()) return "windows";
+            else if (OperatingSystem.IsLinux()) return "linux";
+            else if (OperatingSystem.IsMacOS()) return "macos";
+            else return Environment.OSVersion.Platform.ToString();
+        }
 
-        s_tracerProvider = CreateTracer();
+        s_attributes =
+        [
+            new("service.version", GitVersionInformation.NuGetVersion),
+            new("os.type", GetSystemType()),
+            new("os.description", Environment.OSVersion.VersionString),
+            new("os.name", OperatingSystem.IsLinux() ? LinuxDistro.Id
+                         : OperatingSystem.IsWindows() ? "Windows"
+                         : OperatingSystem.IsMacOS() ? "Mac OS X"
+                         : "Unknown"),
+        ];
+    }
+
+    public Telemetry(string? sessionId = null)
+    {
+        _sessionId = sessionId ?? Guid.NewGuid().ToString();
+        _resourceBuilder = new(() =>
+        {
+            return ResourceBuilder.CreateDefault()
+                .AddService("Beutl", serviceVersion: GitVersionInformation.NuGetVersion, serviceInstanceId: _sessionId)
+                .AddAttributes(s_attributes);
+        });
+        _tracerProvider = CreateTracer();
 
         SetupLogger();
     }
 
     public static ActivitySource Applilcation { get; } = new("Beutl.Application", GitVersionInformation.SemVer);
 
-    private static TracerProvider? CreateTracer()
+    public static Telemetry Instance { get; private set; } = null!;
+
+    private TracerProvider? CreateTracer()
     {
         TelemetryConfig t = GlobalConfiguration.Instance.TelemetryConfig;
         var list = new List<string>(4);
@@ -65,24 +88,18 @@ internal static partial class Telemetry
         else
         {
             return Sdk.CreateTracerProviderBuilder()
-                .SetResourceBuilder(ResourceBuilder.CreateDefault()
-                    .AddService("Beutl", serviceVersion: GitVersionInformation.NuGetVersionV2))
+                .SetResourceBuilder(_resourceBuilder.Value)
+                .AddProcessor(new AddVersionActivityProcessor())
                 .AddSource([.. list])
-                //.AddZipkinExporter()
                 .AddAzureMonitorTraceExporter(b => b.ConnectionString = $"InstrumentationKey={Instrumentation}")
                 .Build();
         }
     }
 
-    public static IDisposable GetDisposable()
+    public static IDisposable GetDisposable(string? sessionId = null)
     {
-        return new Disposable();
-    }
-
-    public static void RecreateTracer()
-    {
-        s_tracerProvider?.Dispose();
-        s_tracerProvider = CreateTracer();
+        Instance = new Telemetry(sessionId);
+        return Instance;
     }
 
     public static Activity? StartActivity([CallerMemberName] string name = "", ActivityKind kind = ActivityKind.Internal)
@@ -90,16 +107,13 @@ internal static partial class Telemetry
         return Applilcation.StartActivity(name, kind);
     }
 
-    private sealed class Disposable : IDisposable
+    public void Dispose()
     {
-        public void Dispose()
-        {
-            s_tracerProvider?.Dispose();
-            s_client.Flush();
-        }
+        _tracerProvider?.Dispose();
+        Logging.Log.LoggerFactory.Dispose();
     }
 
-    private static void SetupLogger()
+    private void SetupLogger()
     {
         string timestamp = DateTime.Now.ToString("yyyyMMddHHmmss");
         int pid = Environment.ProcessId;
@@ -110,28 +124,36 @@ internal static partial class Telemetry
         LoggerConfiguration config = new LoggerConfiguration()
             .Enrich.FromLogContext();
 
-#if DEBUG
+#if DEBUG && !Beutl_PackageTools
         config = config.MinimumLevel.Verbose()
             .WriteTo.Debug(outputTemplate: OutputTemplate);
 #else
         config = config.MinimumLevel.Debug();
 #endif
         config = config.WriteTo.Async(b => b.File(logFile, outputTemplate: OutputTemplate));
-        if (GlobalConfiguration.Instance.TelemetryConfig.Beutl_Logging == true)
-        {
-            config = config.WriteTo.ApplicationInsights(s_client, TelemetryConverter.Traces);
-        }
 
         Log.Logger = config.CreateLogger();
 
-        BeutlApplication.Current.LoggerFactory = LoggerFactory.Create(builder => builder.AddSerilog(Log.Logger, true));
+        Logging.Log.LoggerFactory = LoggerFactory.Create(builder =>
+        {
+            builder.AddSerilog(Log.Logger, true);
+
+            if (GlobalConfiguration.Instance.TelemetryConfig.Beutl_Logging == true)
+            {
+                builder.AddOpenTelemetry(o => o
+                    .SetResourceBuilder(_resourceBuilder.Value)
+                    .AddProcessor(new AddVersionLogProcessor())
+                    .AddAzureMonitorLogExporter(az => az.ConnectionString = $"InstrumentationKey={Instrumentation}"));
+            }
+        });
     }
 
     public static void CompressLogFiles()
     {
         Dispatcher.UIThread.Invoke(async () =>
         {
-            Serilog.ILogger log = Log.ForContext(typeof(Telemetry));
+            Microsoft.Extensions.Logging.ILogger log
+                = Logging.Log.LoggerFactory.CreateLogger(typeof(Telemetry));
             var mutex = new Mutex(false, "Beutl.Logging.Compression", out bool createdNew);
             try
             {
@@ -178,7 +200,7 @@ internal static partial class Telemetry
             }
             catch (Exception ex)
             {
-                log.Error(ex, "Exception occurred while compressing logs");
+                log.LogError(ex, "Exception occurred while compressing logs");
             }
             finally
             {
@@ -202,6 +224,34 @@ internal static partial class Telemetry
         }
         catch
         {
+        }
+    }
+
+    internal class AddVersionActivityProcessor : BaseProcessor<Activity>
+    {
+        public override void OnEnd(Activity data)
+        {
+            base.OnEnd(data);
+            foreach (KeyValuePair<string, object> item in s_attributes)
+            {
+                data.SetTag(item.Key, item.Value);
+            }
+        }
+    }
+
+    internal class AddVersionLogProcessor : BaseProcessor<LogRecord>
+    {
+        public override void OnEnd(LogRecord data)
+        {
+            base.OnEnd(data);
+            if (data.Attributes != null)
+            {
+                data.Attributes = data.Attributes!.Concat(s_attributes).ToArray()!;
+            }
+            else
+            {
+                data.Attributes = s_attributes!;
+            }
         }
     }
 }

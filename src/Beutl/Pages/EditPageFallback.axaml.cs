@@ -23,8 +23,6 @@ using DynamicData.Binding;
 using FluentAvalonia.Styling;
 using FluentAvalonia.UI.Controls;
 
-using Serilog;
-
 namespace Beutl.Pages;
 
 public partial class EditPageFallback : UserControl
@@ -55,13 +53,13 @@ public partial class EditPageFallback : UserControl
         }
 
         SetImage(
-            darkTheme: "avares://Beutl/Assets/social/GitHub-Mark-Light-120px-plus.png",
-            lightTheme: "avares://Beutl/Assets/social/GitHub-Mark-120px-plus.png",
+            darkTheme: "avares://Beutl.Controls/Assets/social/GitHub-Mark-Light-120px-plus.png",
+            lightTheme: "avares://Beutl.Controls/Assets/social/GitHub-Mark-120px-plus.png",
             image: githubLogo);
 
         SetImage(
-            darkTheme: "avares://Beutl/Assets/social/x-logo-white.png",
-            lightTheme: "avares://Beutl/Assets/social/x-logo-black.png",
+            darkTheme: "avares://Beutl.Controls/Assets/social/x-logo-white.png",
+            lightTheme: "avares://Beutl.Controls/Assets/social/x-logo-black.png",
             image: xLogo);
     }
 
@@ -161,10 +159,10 @@ public partial class EditPageFallback : UserControl
             IDisposable? closeDialog = null;
             timer = TimeProvider.System.CreateTimer(_ =>
             {
+                timer?.Dispose();
                 closeDialog = ShowWaitDialog(fileName);
                 activity?.AddEvent(new("WaitDialogShown"));
-                timer?.Dispose();
-            }, null, TimeSpan.Zero, TimeSpan.FromSeconds(3));
+            }, null, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(3));
 
             try
             {

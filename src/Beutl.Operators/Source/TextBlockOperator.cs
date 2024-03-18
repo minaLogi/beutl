@@ -18,6 +18,8 @@ public sealed class TextBlockOperator : DrawablePublishOperator<TextBlock>
     public Setter<FontWeight> FontWeight { get; set; } = new Setter<FontWeight>(TextBlock.FontWeightProperty, Media.FontWeight.Regular);
 
     public Setter<float> Spacing { get; set; } = new Setter<float>(TextBlock.SpacingProperty, 0);
+    
+    public Setter<bool> SplitByCharacters { get; set; } = new Setter<bool>(TextBlock.SplitByCharactersProperty);
 
     public Setter<string?> Text { get; set; } = new Setter<string?>(TextBlock.TextProperty, string.Empty);
 

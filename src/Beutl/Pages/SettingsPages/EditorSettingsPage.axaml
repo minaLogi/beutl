@@ -32,10 +32,10 @@
                     </ctrls:OptionsDisplayItem.ActionButton>
                 </ctrls:OptionsDisplayItem>
 
-                <ctrls:OptionsDisplayItem Description="{x:Static lang:SettingsPage.EnablePointerLockInProperty_Description}" Header="{x:Static lang:SettingsPage.EnablePointerLockInProperty}">
+                <ctrls:OptionsDisplayItem Description="{x:Static lang:SettingsPage.EnableAutoSave_Description}" Header="{x:Static lang:SettingsPage.EnableAutoSave}">
                     <ctrls:OptionsDisplayItem.ActionButton>
                         <ToggleSwitch Classes="left"
-                                      IsChecked="{CompiledBinding EnablePointerLockInProperty.Value}"
+                                      IsChecked="{CompiledBinding EnableAutoSave.Value}"
                                       Theme="{StaticResource CompactToggleSwitchStyle}" />
                     </ctrls:OptionsDisplayItem.ActionButton>
                 </ctrls:OptionsDisplayItem>
@@ -44,6 +44,95 @@
                     <ctrls:OptionsDisplayItem.ActionButton>
                         <ToggleSwitch Classes="left"
                                       IsChecked="{CompiledBinding ShowExactBoundaries.Value}"
+                                      Theme="{StaticResource CompactToggleSwitchStyle}" />
+                    </ctrls:OptionsDisplayItem.ActionButton>
+                </ctrls:OptionsDisplayItem>
+
+                <TextBlock Margin="0,16,0,0"
+                           Text="{x:Static lang:Strings.FrameCache}"
+                           Theme="{StaticResource BodyStrongTextBlockStyle}" />
+
+                <ctrls:OptionsDisplayItem Header="{x:Static lang:SettingsPage.EnableFrameCache}">
+                    <ctrls:OptionsDisplayItem.ActionButton>
+                        <ToggleSwitch Classes="left"
+                                      IsChecked="{CompiledBinding IsFrameCacheEnabled.Value}"
+                                      Theme="{StaticResource CompactToggleSwitchStyle}" />
+                    </ctrls:OptionsDisplayItem.ActionButton>
+                </ctrls:OptionsDisplayItem>
+
+                <ctrls:OptionsDisplayItem Description="{x:Static lang:SettingsPage.FrameCacheMaxSize_Description}"
+                                          Header="{x:Static lang:SettingsPage.FrameCacheMaxSize}"
+                                          IsEnabled="{CompiledBinding IsFrameCacheEnabled.Value}">
+                    <ctrls:OptionsDisplayItem.ActionButton>
+                        <TextBox MinWidth="250" Text="{Binding FrameCacheMaxSize.Value}">
+                            <TextBox.InnerRightContent>
+                                <TextBlock Margin="8,0"
+                                           VerticalAlignment="Center"
+                                           Text="MB" />
+                            </TextBox.InnerRightContent>
+                        </TextBox>
+                    </ctrls:OptionsDisplayItem.ActionButton>
+                </ctrls:OptionsDisplayItem>
+
+                <ctrls:OptionsDisplayItem Header="{x:Static lang:SettingsPage.FrameCacheScale}" IsEnabled="{CompiledBinding IsFrameCacheEnabled.Value}">
+                    <ctrls:OptionsDisplayItem.ActionButton>
+                        <ComboBox MinWidth="250" SelectedIndex="{CompiledBinding FrameCacheScale.Value}">
+                            <ComboBoxItem Content="{x:Static lang:SettingsPage.FrameCacheScale_Original}" />
+                            <ComboBoxItem Content="{x:Static lang:SettingsPage.FrameCacheScale_FitToPreviewer}" />
+                            <ComboBoxItem Content="{x:Static lang:SettingsPage.FrameCacheScale_Half}" />
+                            <ComboBoxItem Content="{x:Static lang:SettingsPage.FrameCacheScale_Quarter}" />
+                        </ComboBox>
+                    </ctrls:OptionsDisplayItem.ActionButton>
+                </ctrls:OptionsDisplayItem>
+
+                <ctrls:OptionsDisplayItem Header="{x:Static lang:SettingsPage.FrameCacheColorType}" IsEnabled="{CompiledBinding IsFrameCacheEnabled.Value}">
+                    <ctrls:OptionsDisplayItem.ActionButton>
+                        <ComboBox MinWidth="250" SelectedIndex="{CompiledBinding FrameCacheColorType.Value}">
+                            <ComboBoxItem Content="RGBA" />
+                            <ComboBoxItem Content="YUV" />
+                        </ComboBox>
+                    </ctrls:OptionsDisplayItem.ActionButton>
+                </ctrls:OptionsDisplayItem>
+
+                <TextBlock Margin="0,16,0,0"
+                           Text="{x:Static lang:SettingsPage.NodeCache}"
+                           Theme="{StaticResource BodyStrongTextBlockStyle}" />
+
+                <ctrls:OptionsDisplayItem Header="{x:Static lang:SettingsPage.EnableNodeCache}">
+                    <ctrls:OptionsDisplayItem.ActionButton>
+                        <ToggleSwitch Classes="left"
+                                      IsChecked="{CompiledBinding IsNodeCacheEnabled.Value}"
+                                      Theme="{StaticResource CompactToggleSwitchStyle}" />
+                    </ctrls:OptionsDisplayItem.ActionButton>
+                </ctrls:OptionsDisplayItem>
+
+                <ctrls:OptionsDisplayItem Header="{x:Static lang:SettingsPage.NodeCacheMaxPixels}" IsEnabled="{CompiledBinding IsNodeCacheEnabled.Value}">
+                    <ctrls:OptionsDisplayItem.ActionButton>
+                        <NumericUpDown MinWidth="250"
+                                       FormatString="F0"
+                                       Minimum="{Binding NodeCacheMinPixels.Value}"
+                                       Value="{Binding NodeCacheMaxPixels.Value}" />
+                    </ctrls:OptionsDisplayItem.ActionButton>
+                </ctrls:OptionsDisplayItem>
+
+                <ctrls:OptionsDisplayItem Header="{x:Static lang:SettingsPage.NodeCacheMinPixels}" IsEnabled="{CompiledBinding IsNodeCacheEnabled.Value}">
+                    <ctrls:OptionsDisplayItem.ActionButton>
+                        <NumericUpDown MinWidth="250"
+                                       FormatString="F0"
+                                       Maximum="{Binding NodeCacheMaxPixels.Value}"
+                                       Minimum="1"
+                                       Value="{Binding NodeCacheMinPixels.Value}" />
+                    </ctrls:OptionsDisplayItem.ActionButton>
+                </ctrls:OptionsDisplayItem>
+
+                <TextBlock Margin="0,16,0,0"
+                           Text="{x:Static lang:SettingsPage.PropertyEditor}"
+                           Theme="{StaticResource BodyStrongTextBlockStyle}" />
+
+                <ctrls:OptionsDisplayItem Description="{x:Static lang:SettingsPage.EnablePointerLockInProperty_Description}" Header="{x:Static lang:SettingsPage.EnablePointerLockInProperty}">
+                    <ctrls:OptionsDisplayItem.ActionButton>
+                        <ToggleSwitch Classes="left"
+                                      IsChecked="{CompiledBinding EnablePointerLockInProperty.Value}"
                                       Theme="{StaticResource CompactToggleSwitchStyle}" />
                     </ctrls:OptionsDisplayItem.ActionButton>
                 </ctrls:OptionsDisplayItem>

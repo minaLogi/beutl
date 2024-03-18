@@ -14,7 +14,7 @@ using Beutl.Serialization;
 
 namespace Beutl.ProjectSystem;
 
-public class Element : ProjectItem
+public class Element : ProjectItem, IAffectsRender
 {
     public static readonly CoreProperty<TimeSpan> StartProperty;
     public static readonly CoreProperty<TimeSpan> LengthProperty;
@@ -66,34 +66,21 @@ public class Element : ProjectItem
             .Accessor(o => o.UseNode, (o, v) => o.UseNode = v)
             .DefaultValue(false)
             .Register();
-
-        IsEnabledProperty.Changed.Subscribe(args =>
-        {
-            if (args.Sender is Element element)
-            {
-                element.ForceRender();
-            }
-        });
-        UseNodeProperty.Changed.Subscribe(args =>
-        {
-            if (args.Sender is Element element)
-            {
-                element.ForceRender();
-            }
-        });
     }
 
     public Element()
     {
         Operation = new SourceOperation();
-        Operation.Invalidated += (_, _) => ForceRender();
+        Operation.Invalidated += (_, e) => Invalidated?.Invoke(this, e);
 
         NodeTree = new ElementNodeTreeModel();
-        NodeTree.Invalidated += (_, _) => ForceRender();
+        NodeTree.Invalidated += (_, e) => Invalidated?.Invoke(this, e);
 
         HierarchicalChildren.Add(Operation);
         HierarchicalChildren.Add(NodeTree);
     }
+
+    public event EventHandler<RenderInvalidatedEventArgs>? Invalidated;
 
     // 0以上
     [Display(Name = nameof(Strings.StartTime), ResourceType = typeof(Strings))]
@@ -152,38 +139,6 @@ public class Element : ProjectItem
         this.JsonRestore2(filename);
     }
 
-    [ObsoleteSerializationApi]
-    public override void ReadFromJson(JsonObject json)
-    {
-        base.ReadFromJson(json);
-
-        if (json.TryGetPropertyValue(nameof(Operation), out JsonNode? operationNode)
-            && operationNode is JsonObject operationObj)
-        {
-            Operation.ReadFromJson(operationObj);
-        }
-
-        if (json.TryGetPropertyValue(nameof(NodeTree), out JsonNode? nodeTreeNode)
-            && nodeTreeNode is JsonObject nodeTreeObj)
-        {
-            NodeTree.ReadFromJson(nodeTreeObj);
-        }
-    }
-
-    [ObsoleteSerializationApi]
-    public override void WriteToJson(JsonObject json)
-    {
-        base.WriteToJson(json);
-
-        var operationJson = new JsonObject();
-        Operation.WriteToJson(operationJson);
-        json[nameof(Operation)] = operationJson;
-
-        var nodeTreeJson = new JsonObject();
-        NodeTree.WriteToJson(nodeTreeJson);
-        json[nameof(NodeTree)] = nodeTreeJson;
-    }
-
     public override void Serialize(ICoreSerializationContext context)
     {
         base.Serialize(context);
@@ -218,19 +173,6 @@ public class Element : ProjectItem
         }
     }
 
-    private void ForceRender()
-    {
-        Scene? scene = this.FindHierarchicalParent<Scene>();
-        if (IsEnabled
-            && scene != null
-            && Start <= scene.CurrentFrame
-            && scene.CurrentFrame < Start + Length
-            && scene.Renderer is { IsDisposed: false })
-        {
-            scene.Renderer.RaiseInvalidated(scene.CurrentFrame);
-        }
-    }
-
     protected override void OnPropertyChanged(PropertyChangedEventArgs args)
     {
         base.OnPropertyChanged(args);
@@ -255,25 +197,19 @@ public class Element : ProjectItem
 
             if (e.Property == StartProperty || e.Property == LengthProperty)
             {
-                if (IsEnabled)
-                {
-                    Scene? scene = this.FindHierarchicalParent<Scene>();
-                    if (scene is { Renderer.IsDisposed: false } renderer)
-                    {
-                        TimeRange newRange = Range;
-                        TimeRange oldRange = GetOldRange();
-                        TimeSpan current = scene.CurrentFrame;
+                TimeRange newRange = Range;
+                TimeRange oldRange = GetOldRange();
 
-                        if (newRange.Contains(current) || oldRange.Contains(current))
-                        {
-                            renderer.Renderer.RaiseInvalidated(scene.CurrentFrame);
-                        }
-                    }
-                }
+                Invalidated?.Invoke(this, new TimelineInvalidatedEventArgs(this, nameof(e.PropertyName))
+                {
+                    AffectedRange = [newRange, oldRange]
+                });
             }
-            else if (e.Property == ZIndexProperty)
+            else if (e.Property == ZIndexProperty
+                || e.Property == IsEnabledProperty
+                || e.Property == UseNodeProperty)
             {
-                ForceRender();
+                Invalidated?.Invoke(this, new RenderInvalidatedEventArgs(this, nameof(e.PropertyName)));
             }
         }
     }

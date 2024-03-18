@@ -39,7 +39,7 @@
                    Margin="8,0"
                    VerticalAlignment="Center"
                    RenderOptions.BitmapInterpolationMode="HighQuality"
-                   Source="/Assets/logo.ico">
+                   Source="avares://Beutl.Controls/Assets/logo.ico">
                 <Image.Clip>
                     <EllipseGeometry RadiusX="12"
                                      RadiusY="12"
@@ -173,6 +173,9 @@
                     <MenuItem Click="MonitorKeyModifier_Click"
                               Header="Monitor KeyModifier"
                               IsVisible="{Binding IsDebuggerAttached}" />
+                    <MenuItem Click="ThrowUnhandledException_Click"
+                              Header="Throw Unhandled Exception"
+                              IsVisible="{Binding IsDebuggerAttached}" />
                     <MenuItem Click="GoToInfomationPage" Header="{x:Static lang:Strings.Info}" />
                 </MenuItem>
             </Menu>
@@ -217,8 +220,8 @@
                         Theme="{StaticResource TransparentButton}">
                     <Button.Flyout>
                         <Flyout FlyoutPresenterClasses="HiddenNotificationPadding8">
-                            <ScrollViewer>
-                                <StackPanel x:Name="HiddenNotificationPanel" Spacing="8" />
+                            <ScrollViewer Margin="-8">
+                                <StackPanel x:Name="HiddenNotificationPanel" Spacing="4" />
                             </ScrollViewer>
                         </Flyout>
                     </Button.Flyout>
@@ -258,7 +261,7 @@
                     Grid.RowSpan="2"
                     HorizontalAlignment="Right"
                     VerticalAlignment="Top"
-                    Spacing="8">
+                    Spacing="4">
             <StackPanel.Styles>
                 <Style Selector="ui|InfoBar">
                     <Style Selector="^">

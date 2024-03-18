@@ -9,6 +9,7 @@ using Beutl.Commands;
 using Beutl.Helpers;
 using Beutl.Models;
 using Beutl.ProjectSystem;
+using Beutl.Serialization;
 using Beutl.Services;
 using Beutl.Utilities;
 
@@ -82,7 +83,7 @@ public sealed class ElementViewModel : IDisposable
             .AddTo(_disposables);
 
         SplitByCurrentFrame
-            .Subscribe(_ => OnSplit(Scene.CurrentFrame))
+            .Subscribe(_ => OnSplit(timeline.EditorContext.CurrentTime.Value))
             .AddTo(_disposables);
 
         Cut.Subscribe(OnCut)
@@ -91,15 +92,24 @@ public sealed class ElementViewModel : IDisposable
         Copy.Subscribe(async () => await SetClipboard())
             .AddTo(_disposables);
 
-        Exclude.Subscribe(() => Scene.RemoveChild(Model).DoAndRecord(CommandRecorder.Default))
+        Exclude.Subscribe(() =>
+            {
+                CommandRecorder recorder = Timeline.EditorContext.CommandRecorder;
+                Scene.RemoveChild(Model).DoAndRecord(recorder);
+            })
             .AddTo(_disposables);
 
         Delete.Subscribe(OnDelete)
             .AddTo(_disposables);
 
         Color.Skip(1)
-            .Subscribe(c => new ChangePropertyCommand<Media.Color>(Model, Element.AccentColorProperty, c.ToMedia(), Model.AccentColor)
-                .DoAndRecord(CommandRecorder.Default))
+            .Subscribe(c =>
+            {
+                CommandRecorder recorder = Timeline.EditorContext.CommandRecorder;
+                RecordableCommands.Edit(Model, Element.AccentColorProperty, c.ToMedia(), Model.AccentColor)
+                    .WithStoables([Model])
+                    .DoAndRecord(recorder);
+            })
             .AddTo(_disposables);
 
         FinishEditingAnimation.Subscribe(OnFinishEditingAnimation)
@@ -254,14 +264,16 @@ public sealed class ElementViewModel : IDisposable
     public async Task SubmitViewModelChanges()
     {
         PrepareAnimationContext context = PrepareAnimation();
+        CommandRecorder recorder = Timeline.EditorContext.CommandRecorder;
 
         float scale = Timeline.Options.Value.Scale;
         int rate = Scene.FindHierarchicalParent<Project>() is { } proj ? proj.GetFrameRate() : 30;
         TimeSpan start = BorderMargin.Value.Left.ToTimeSpan(scale).RoundToRate(rate);
         TimeSpan length = Width.Value.ToTimeSpan(scale).RoundToRate(rate);
         int zindex = Timeline.ToLayerNumber(Margin.Value);
+
         Scene.MoveChild(zindex, start, length, Model)
-            .DoAndRecord(CommandRecorder.Default);
+            .DoAndRecord(recorder);
 
         await AnimationRequest(context);
     }
@@ -271,8 +283,16 @@ public sealed class ElementViewModel : IDisposable
         IClipboard? clipboard = App.GetClipboard();
         if (clipboard != null)
         {
-            var jsonNode = new JsonObject();
-            Model.WriteToJson(jsonNode);
+            JsonObject? jsonNode;
+
+            var context = new JsonSerializationContext(typeof(Element), NullSerializationErrorNotifier.Instance);
+            using (ThreadLocalSerializationContext.Enter(context))
+            {
+                Model.Serialize(context);
+
+                jsonNode = context.GetJsonObject();
+            }
+
             string json = jsonNode.ToJsonString(JsonHelper.SerializerOptions);
             var data = new DataObject();
             data.Set(DataFormats.Text, json);
@@ -302,13 +322,8 @@ public sealed class ElementViewModel : IDisposable
 
     private void OnDelete()
     {
-        string fileName = Model.FileName;
-        if (File.Exists(fileName))
-        {
-            File.Delete(fileName);
-        }
-
-        Scene.RemoveChild(Model).Do();
+        CommandRecorder recorder = Timeline.EditorContext.CommandRecorder;
+        Scene.DeleteChild(Model).DoAndRecord(recorder);
     }
 
     private void OnBringAnimationToTop()
@@ -348,6 +363,7 @@ public sealed class ElementViewModel : IDisposable
 
     private void OnSplit(TimeSpan timeSpan)
     {
+        CommandRecorder recorder = Timeline.EditorContext.CommandRecorder;
         int rate = Scene.FindHierarchicalParent<Project>() is { } proj ? proj.GetFrameRate() : 30;
         TimeSpan minLength = TimeSpan.FromSeconds(1d / rate);
         TimeSpan absTime = timeSpan.RoundToRate(rate);
@@ -368,10 +384,9 @@ public sealed class ElementViewModel : IDisposable
         IRecordableCommand command3 = backward.Operation.OnSplit(true, forwardLength, -forwardLength);
         IRecordableCommand command4 = Model.Operation.OnSplit(false, TimeSpan.Zero, -backwardLength);
 
-        command1.Append(command2)
-            .Append(command3)
-            .Append(command4)
-            .DoAndRecord(CommandRecorder.Default);
+        IRecordableCommand[] commands = [command1, command2, command3, command4];
+        commands.ToCommand()
+            .DoAndRecord(recorder);
     }
 
     private async void OnChangeToOriginalLength()
@@ -381,6 +396,7 @@ public sealed class ElementViewModel : IDisposable
             && op.TryGetOriginalLength(out TimeSpan timeSpan))
         {
             PrepareAnimationContext context = PrepareAnimation();
+            CommandRecorder recorder = Timeline.EditorContext.CommandRecorder;
 
             int rate = Scene.FindHierarchicalParent<Project>() is { } proj ? proj.GetFrameRate() : 30;
             TimeSpan length = timeSpan.FloorToRate(rate);
@@ -396,7 +412,7 @@ public sealed class ElementViewModel : IDisposable
             }
 
             Scene.MoveChild(Model.ZIndex, Model.Start, length, Model)
-                .DoAndRecord(CommandRecorder.Default);
+                .DoAndRecord(recorder);
 
             await AnimationRequest(context);
         }

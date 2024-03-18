@@ -1,6 +1,10 @@
 ﻿using System.Diagnostics;
+using System.Runtime.InteropServices;
 
 using Beutl.Graphics;
+using Beutl.Graphics.Rendering;
+using Beutl.Media.Immutable;
+using Beutl.Reactive;
 
 using SkiaSharp;
 using SkiaSharp.HarfBuzz;
@@ -8,7 +12,7 @@ using SkiaSharp.HarfBuzz;
 namespace Beutl.Media.TextFormatting;
 
 [DebuggerDisplay("{Text}")]
-public struct FormattedText : IEquatable<FormattedText>
+public class FormattedText : IEquatable<FormattedText>
 {
     private FontWeight _weight = FontWeight.Regular;
     private FontStyle _style = FontStyle.Normal;
@@ -17,8 +21,14 @@ public struct FormattedText : IEquatable<FormattedText>
     private float _spacing = 0;
     private StringSpan _text = StringSpan.Empty;
     private FontMetrics _metrics = default;
-    private Size _bounds = default;
+    private Rect _bounds = default;
+    private Rect _actualBounds;
     private bool _isDirty = false;
+    private IPen? _pen;
+    private SKTextBlob? _textBlob;
+    private SKPath? _fillPath;
+    private SKPath? _strokePath;
+    private List<SKPathGeometry> _pathList = [];
 
     public FormattedText()
     {
@@ -75,31 +85,59 @@ public struct FormattedText : IEquatable<FormattedText>
 
     public IBrush? Brush { get; set; }
 
-    public IPen? Pen { get; set; }
+    public IPen? Pen
+    {
+        get => _pen;
+        set => SetProperty(ref _pen, value);
+    }
 
-    public FontMetrics Metrics => MeasureAndSetField().Metrics;
+    public FontMetrics Metrics
+    {
+        get
+        {
+            MeasureAndSetField();
+            return _metrics;
+        }
+    }
 
-    public Size Bounds => MeasureAndSetField().Bounds;
+    public Rect Bounds
+    {
+        get
+        {
+            MeasureAndSetField();
+            return _bounds;
+        }
+    }
 
+    // Strokeを含めた境界線
+    public Rect ActualBounds
+    {
+        get
+        {
+            MeasureAndSetField();
+            return _actualBounds;
+        }
+    }
+
+    // テスト用
     internal Point AddToSKPath(SKPath path, Point point)
     {
-        SKTypeface typeface = new Typeface(Font, Style, Weight).ToSkia();
-        using SKPaint paint = new()
-        {
-            TextSize = Size,
-            Typeface = typeface
-        };
+        using SKFont font = this.ToSKFont();
 
-        using var shaper = new SKShaper(typeface);
+        using var shaper = new SKShaper(font.Typeface);
         using var buffer = new HarfBuzzSharp.Buffer();
         buffer.AddUtf16(Text.AsSpan());
         buffer.GuessSegmentProperties();
 
+        using SKPaint paint = new()
+        {
+            TextSize = Size,
+            Typeface = font.Typeface
+        };
         SKShaper.Result result = shaper.Shape(buffer, paint);
 
         // create the text blob
         using var builder = new SKTextBlobBuilder();
-        using SKFont font = paint.ToFont();
         SKPositionedRunBuffer run = builder.AllocatePositionedRun(font, result.Codepoints.Length);
 
         // copy the glyphs
@@ -128,29 +166,105 @@ public struct FormattedText : IEquatable<FormattedText>
         return point;
     }
 
-    private (FontMetrics, Size) Measure()
+    internal SKPath GetFillPath()
     {
-        SKTypeface typeface = new Typeface(Font, Style, Weight).ToSkia();
-        using SKPaint paint = new()
+        MeasureAndSetField();
+        return _fillPath!;
+    }
+
+    internal SKPath? GetStrokePath()
+    {
+        MeasureAndSetField();
+        return _strokePath;
+    }
+
+    internal SKTextBlob GetTextBlob()
+    {
+        MeasureAndSetField();
+        return _textBlob!;
+    }
+
+    internal SKFont ToSKFont()
+    {
+        var typeface = new Typeface(Font, Style, Weight);
+        var font = new SKFont(typeface.ToSkia(), Size)
         {
-            TextSize = Size,
-            Typeface = typeface
+            Edging = SKFontEdging.Antialias,
+            Subpixel = true,
+            Hinting = SKFontHinting.Full
         };
 
-        using var shaper = new SKShaper(typeface);
+        return font;
+    }
+
+    internal IReadOnlyList<Geometry> ToGeometies()
+    {
+        MeasureAndSetField();
+        return _pathList;
+    }
+
+    private void Measure()
+    {
+        using SKFont font = ToSKFont();
+
+        using var shaper = new SKShaper(font.Typeface);
         using var buffer = new HarfBuzzSharp.Buffer();
         buffer.AddUtf16(Text.AsSpan());
         buffer.GuessSegmentProperties();
 
+        using SKPaint paint = new()
+        {
+            TextSize = Size,
+            Typeface = font.Typeface,
+        };
         SKShaper.Result result = shaper.Shape(buffer, paint);
 
-        FontMetrics fontMetrics = paint.FontMetrics.ToFontMetrics();
-        float w = result.Width;
-        var size = new Size(
-            w + (buffer.Length - 1) * Spacing,
-            fontMetrics.Descent - fontMetrics.Ascent);
+        // create the text blob
+        using var builder = new SKTextBlobBuilder();
+        SKPositionedRunBuffer run = builder.AllocatePositionedRun(font, result.Codepoints.Length);
 
-        return (fontMetrics, size);
+        var fillPath = new SKPath();
+        Span<ushort> glyphs = run.GetGlyphSpan();
+        Span<SKPoint> positions = run.GetPositionSpan();
+        CollectionsMarshal.SetCount(_pathList, result.Codepoints.Length);
+        Span<SKPathGeometry> pathList = CollectionsMarshal.AsSpan(_pathList);
+        for (int i = 0; i < result.Codepoints.Length; i++)
+        {
+            glyphs[i] = (ushort)result.Codepoints[i];
+
+            SKPoint point = result.Points[i];
+            point.X += i * Spacing;
+            positions[i] = point;
+
+            SKPath tmp = font.GetGlyphPath(glyphs[i]);
+            fillPath.AddPath(tmp, point.X, point.Y);
+
+            tmp.Transform(SKMatrix.CreateTranslation(point.X, point.Y));
+
+            ref SKPathGeometry? exist = ref pathList[i]!;
+            exist ??= new SKPathGeometry();
+            exist.SetSKPath(tmp, false);
+        }
+
+        SKPath? strokePath = null;
+        // 空白で開始または、終了した場合
+        var bounds = new Rect(0, 0, (glyphs.Length - 1) * Spacing + result.Width, fillPath.TightBounds.Height);
+        Rect actualBounds = fillPath.TightBounds.ToGraphicsRect();
+        SKTextBlob textBlob = builder.Build();
+
+        if (result.Codepoints.Length > 0)
+        {
+            if (Pen != null && Pen.Thickness > 0)
+            {
+                strokePath = PenHelper.CreateStrokePath(fillPath, Pen, actualBounds);
+                actualBounds = strokePath.TightBounds.ToGraphicsRect();
+            }
+        }
+
+        (_metrics, _bounds, _actualBounds) = (font.Metrics.ToFontMetrics(), bounds, actualBounds);
+
+        (_textBlob, _fillPath, _strokePath).DisposeAll();
+        (_textBlob, _fillPath, _strokePath) = (textBlob, fillPath, strokePath);
     }
 
     private void SetProperty<T>(ref T field, T value)
@@ -162,15 +276,13 @@ public struct FormattedText : IEquatable<FormattedText>
         }
     }
 
-    private (FontMetrics Metrics, Size Bounds) MeasureAndSetField()
+    private void MeasureAndSetField()
     {
         if (_isDirty)
         {
-            (_metrics, _bounds) = Measure();
+            Measure();
             _isDirty = false;
         }
-
-        return (_metrics, _bounds);
     }
 
     public override bool Equals(object? obj)
@@ -178,9 +290,17 @@ public struct FormattedText : IEquatable<FormattedText>
         return obj is FormattedText text && Equals(text);
     }
 
-    public bool Equals(FormattedText other)
+    public bool Equals(FormattedText? other)
     {
-        return Weight == other.Weight && Style == other.Style && Font.Equals(other.Font) && Size == other.Size && Spacing == other.Spacing && Text.Equals(other.Text) && BeginOnNewLine == other.BeginOnNewLine && EqualityComparer<IBrush>.Default.Equals(Brush, other.Brush);
+        return Weight == other?.Weight
+            && Style == other?.Style
+            && Font.Equals(other?.Font)
+            && Size == other?.Size
+            && Spacing == other?.Spacing
+            && Text.Equals(other?.Text)
+            && BeginOnNewLine == other?.BeginOnNewLine
+            && EqualityComparer<IBrush>.Default.Equals(Brush, other?.Brush)
+            && EqualityComparer<IPen>.Default.Equals(Pen, other?.Pen);
     }
 
     public override int GetHashCode()
@@ -194,6 +314,7 @@ public struct FormattedText : IEquatable<FormattedText>
         hash.Add(Text);
         hash.Add(BeginOnNewLine);
         hash.Add(Brush);
+        hash.Add(Pen);
         return hash.ToHashCode();
     }
 

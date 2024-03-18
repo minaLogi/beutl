@@ -1,7 +1,9 @@
-﻿using System.Text.Json.Nodes;
+﻿using System.Collections.Immutable;
+using System.Text.Json.Nodes;
 
 using Beutl.Animation;
 using Beutl.Media;
+using Beutl.Media.Immutable;
 
 using Microsoft.Extensions.DependencyInjection;
 
@@ -11,26 +13,10 @@ using ReactiveUI;
 
 namespace Beutl.ViewModels.Editors;
 
-public sealed class SetCommand(IAbstractProperty setter, object? oldValue, object? newValue) : IRecordableCommand
-{
-    public void Do()
-    {
-        setter.SetValue(newValue);
-    }
-
-    public void Redo()
-    {
-        Do();
-    }
-
-    public void Undo()
-    {
-        setter.SetValue(oldValue);
-    }
-}
-
 public sealed class BrushEditorViewModel : BaseEditorViewModel
 {
+    private IDisposable? _revoker;
+
     public BrushEditorViewModel(IAbstractProperty property)
         : base(property)
     {
@@ -38,6 +24,14 @@ public sealed class BrushEditorViewModel : BaseEditorViewModel
             .Select(x => x as IBrush)
             .ToReadOnlyReactivePropertySlim()
             .DisposeWith(Disposables);
+
+        AvaloniaBrush = new ReactiveProperty<Avalonia.Media.Brush?>();
+        Value.Subscribe(v =>
+        {
+            _revoker?.Dispose();
+            _revoker = null;
+            (AvaloniaBrush.Value, _revoker) = v.ToAvaBrushSync();
+        });
 
         ChildContext = Value.Select(v => v as ICoreObject)
             .Select(x => x != null ? new PropertiesEditorViewModel(x, m => m.Browsable) : null)
@@ -60,7 +54,7 @@ public sealed class BrushEditorViewModel : BaseEditorViewModel
         IsRadialGradient = Value.Select(v => v is IRadialGradientBrush)
             .ToReadOnlyReactivePropertySlim()
             .DisposeWith(Disposables);
-        
+
         IsPerlinNoise = Value.Select(v => v is IPerlinNoiseBrush)
             .ToReadOnlyReactivePropertySlim()
             .DisposeWith(Disposables);
@@ -86,6 +80,8 @@ public sealed class BrushEditorViewModel : BaseEditorViewModel
 
     public ReadOnlyReactivePropertySlim<IBrush?> Value { get; }
 
+    public ReactiveProperty<Avalonia.Media.Brush?> AvaloniaBrush { get; }
+
     public ReadOnlyReactivePropertySlim<PropertiesEditorViewModel?> ChildContext { get; }
 
     public ReadOnlyReactivePropertySlim<bool> IsSolid { get; }
@@ -95,7 +91,7 @@ public sealed class BrushEditorViewModel : BaseEditorViewModel
     public ReadOnlyReactivePropertySlim<bool> IsConicGradient { get; }
 
     public ReadOnlyReactivePropertySlim<bool> IsRadialGradient { get; }
-    
+
     public ReadOnlyReactivePropertySlim<bool> IsPerlinNoise { get; }
 
     public ReactivePropertySlim<bool> IsExpanded { get; } = new();
@@ -112,7 +108,63 @@ public sealed class BrushEditorViewModel : BaseEditorViewModel
     {
         if (!EqualityComparer<IBrush>.Default.Equals(oldValue, newValue))
         {
-            CommandRecorder.Default.DoAndPush(new SetCommand(WrappedProperty, oldValue, newValue));
+            CommandRecorder recorder = this.GetRequiredService<CommandRecorder>();
+            IAbstractProperty prop = WrappedProperty;
+
+            RecordableCommands.Create(GetStorables())
+                .OnDo(() => prop.SetValue(newValue))
+                .OnUndo(() => prop.SetValue(oldValue))
+                .ToCommand()
+                .DoAndRecord(recorder);
+        }
+    }
+
+    public void InsertGradientStop(int index, GradientStop item)
+    {
+        if (Value.Value is GradientBrush { GradientStops: { } list })
+        {
+            CommandRecorder recorder = this.GetRequiredService<CommandRecorder>();
+            list.BeginRecord<GradientStop>()
+                .Insert(index, item)
+                .ToCommand(GetStorables())
+                .DoAndRecord(recorder);
+        }
+    }
+
+    public void RemoveGradientStop(int index)
+    {
+        if (Value.Value is GradientBrush { GradientStops: { } list })
+        {
+            CommandRecorder recorder = this.GetRequiredService<CommandRecorder>();
+            list.BeginRecord<GradientStop>()
+                .RemoveAt(index)
+                .ToCommand(GetStorables())
+                .DoAndRecord(recorder);
+        }
+    }
+
+    public void ConfirmeGradientStop(
+        int oldIndex, int newIndex,
+        ImmutableGradientStop oldObject, GradientStop obj)
+    {
+        CommandRecorder recorder = this.GetRequiredService<CommandRecorder>();
+        if (Value.Value is GradientBrush { GradientStops: { } list })
+        {
+            IRecordableCommand? move = oldIndex == newIndex ? null : list.BeginRecord<GradientStop>()
+                .Move(oldIndex, newIndex)
+                .ToCommand([]);
+
+            IRecordableCommand? offset = obj.Offset != oldObject.Offset
+                ? RecordableCommands.Edit(obj, GradientStop.OffsetProperty, obj.Offset, oldObject.Offset)
+                : null;
+            IRecordableCommand? color = obj.Color != oldObject.Color
+                ? RecordableCommands.Edit(obj, GradientStop.ColorProperty, obj.Color, oldObject.Color)
+                : null;
+
+            move.Append(offset)
+                .Append(color)
+                .WithStoables(GetStorables())
+                .DoAndRecord(recorder);
         }
     }
 

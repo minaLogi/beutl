@@ -7,9 +7,9 @@ using SkiaSharp;
 
 namespace Beutl.Graphics;
 
-public readonly struct BrushConstructor(Size targetSize, IBrush? brush, BlendMode blendMode, IImmediateCanvasFactory factory)
+public readonly struct BrushConstructor(Rect bounds, IBrush? brush, BlendMode blendMode, IImmediateCanvasFactory factory)
 {
-    public Size TargetSize { get; } = targetSize;
+    public Rect Bounds { get; } = bounds;
 
     public IBrush? Brush { get; } = brush;
 
@@ -22,6 +22,9 @@ public readonly struct BrushConstructor(Size targetSize, IBrush? brush, BlendMod
         float opacity = (Brush?.Opacity ?? 0) / 100f;
         paint.IsAntialias = true;
         paint.BlendMode = (SKBlendMode)BlendMode;
+        paint.HintingLevel = SKPaintHinting.Full;
+        paint.LcdRenderText = true;
+        paint.SubpixelText = true;
 
         paint.Color = new SKColor(255, 255, 255, (byte)(255 * opacity));
 
@@ -50,15 +53,17 @@ public readonly struct BrushConstructor(Size targetSize, IBrush? brush, BlendMod
     private void ConfigureGradientBrush(SKPaint paint, IGradientBrush gradientBrush)
     {
         var tileMode = gradientBrush.SpreadMethod.ToSKShaderTileMode();
-        SKColor[] stopColors = gradientBrush.GradientStops.SelectArray(s => s.Color.ToSKColor());
-        float[] stopOffsets = gradientBrush.GradientStops.SelectArray(s => s.Offset);
+        SKColor[] stopColors = gradientBrush.GradientStops.Select(s => s.Color.ToSKColor()).ToArray();
+        float[] stopOffsets = gradientBrush.GradientStops.Select(s => s.Offset).ToArray();
 
         switch (gradientBrush)
         {
             case ILinearGradientBrush linearGradient:
                 {
-                    var start = linearGradient.StartPoint.ToPixels(TargetSize).ToSKPoint();
-                    var end = linearGradient.EndPoint.ToPixels(TargetSize).ToSKPoint();
+                    var start = linearGradient.StartPoint.ToPixels(Bounds.Size).ToSKPoint();
+                    var end = linearGradient.EndPoint.ToPixels(Bounds.Size).ToSKPoint();
+                    start.Offset(Bounds.X, Bounds.Y);
+                    end.Offset(Bounds.X, Bounds.Y);
 
                     if (linearGradient.Transform is null)
                     {
@@ -69,8 +74,8 @@ public readonly struct BrushConstructor(Size targetSize, IBrush? brush, BlendMod
                     }
                     else
                     {
-                        Point transformOrigin = linearGradient.TransformOrigin.ToPixels(TargetSize);
-                        var offset = Matrix.CreateTranslation(transformOrigin);
+                        Point transformOrigin = linearGradient.TransformOrigin.ToPixels(Bounds.Size);
+                        var offset = Matrix.CreateTranslation(transformOrigin + Bounds.Position);
                         Matrix transform = (-offset) * linearGradient.Transform.Value * offset;
 
                         using (var shader = SKShader.CreateLinearGradient(start, end, stopColors, stopOffsets, tileMode, transform.ToSKMatrix()))
@@ -83,9 +88,11 @@ public readonly struct BrushConstructor(Size targetSize, IBrush? brush, BlendMod
                 }
             case IRadialGradientBrush radialGradient:
                 {
-                    var center = radialGradient.Center.ToPixels(TargetSize).ToSKPoint();
-                    float radius = radialGradient.Radius * TargetSize.Width;
-                    var origin = radialGradient.GradientOrigin.ToPixels(TargetSize).ToSKPoint();
+                    float radius = (radialGradient.Radius / 100) * Bounds.Width;
+                    var center = radialGradient.Center.ToPixels(Bounds.Size).ToSKPoint();
+                    var origin = radialGradient.GradientOrigin.ToPixels(Bounds.Size).ToSKPoint();
+                    center.Offset(Bounds.X, Bounds.Y);
+                    origin.Offset(Bounds.X, Bounds.Y);
 
                     if (origin.Equals(center))
                     {
@@ -99,8 +106,8 @@ public readonly struct BrushConstructor(Size targetSize, IBrush? brush, BlendMod
                         }
                         else
                         {
-                            Point transformOrigin = radialGradient.TransformOrigin.ToPixels(TargetSize);
-                            var offset = Matrix.CreateTranslation(transformOrigin);
+                            Point transformOrigin = radialGradient.TransformOrigin.ToPixels(Bounds.Size);
+                            var offset = Matrix.CreateTranslation(transformOrigin + Bounds.Position);
                             Matrix transform = (-offset) * radialGradient.Transform.Value * (offset);
 
                             using (var shader = SKShader.CreateRadialGradient(center, radius, stopColors, stopOffsets, tileMode, transform.ToSKMatrix()))
@@ -143,8 +150,8 @@ public readonly struct BrushConstructor(Size targetSize, IBrush? brush, BlendMod
                         else
                         {
 
-                            Point transformOrigin = radialGradient.TransformOrigin.ToPixels(TargetSize);
-                            var offset = Matrix.CreateTranslation(transformOrigin);
+                            Point transformOrigin = radialGradient.TransformOrigin.ToPixels(Bounds.Size);
+                            var offset = Matrix.CreateTranslation(transformOrigin + Bounds.Position);
                             Matrix transform = (-offset) * radialGradient.Transform.Value * (offset);
 
                             using (var shader = SKShader.CreateCompose(
@@ -161,7 +168,8 @@ public readonly struct BrushConstructor(Size targetSize, IBrush? brush, BlendMod
                 }
             case IConicGradientBrush conicGradient:
                 {
-                    var center = conicGradient.Center.ToPixels(TargetSize).ToSKPoint();
+                    var center = conicGradient.Center.ToPixels(Bounds.Size).ToSKPoint();
+                    center.Offset(Bounds.X, Bounds.Y);
 
                     // Skia's default is that angle 0 is from the right hand side of the center point
                     // but we are matching CSS where the vertical point above the center is 0.
@@ -170,8 +178,8 @@ public readonly struct BrushConstructor(Size targetSize, IBrush? brush, BlendMod
 
                     if (conicGradient.Transform is { })
                     {
-                        Point transformOrigin = conicGradient.TransformOrigin.ToPixels(TargetSize);
-                        var offset = Matrix.CreateTranslation(transformOrigin);
+                        Point transformOrigin = conicGradient.TransformOrigin.ToPixels(Bounds.Size);
+                        var offset = Matrix.CreateTranslation(transformOrigin + Bounds.Position);
                         Matrix transform = (-offset) * conicGradient.Transform.Value * (offset);
 
                         rotation = rotation.PreConcat(transform.ToSKMatrix());
@@ -239,7 +247,7 @@ public readonly struct BrushConstructor(Size targetSize, IBrush? brush, BlendMod
         SKSurface? intermediate = null;
         try
         {
-            var calc = new TileBrushCalculator(tileBrush, pixelSize.ToSize(1), TargetSize);
+            var calc = new TileBrushCalculator(tileBrush, pixelSize.ToSize(1), Bounds.Size);
             SKSizeI intermediateSize = calc.IntermediateSize.ToSKSize().ToSizeI();
 
             intermediate = Factory.CreateRenderTarget(intermediateSize.Width, intermediateSize.Height);
@@ -283,8 +291,8 @@ public readonly struct BrushConstructor(Size targetSize, IBrush? brush, BlendMod
 
             if (tileBrush.Transform is { })
             {
-                Point origin = tileBrush.TransformOrigin.ToPixels(TargetSize);
-                var offset = Matrix.CreateTranslation(origin);
+                Point origin = tileBrush.TransformOrigin.ToPixels(Bounds.Size);
+                var offset = Matrix.CreateTranslation(origin + Bounds.Position);
                 Matrix transform = (-offset) * tileBrush.Transform.Value * offset;
 
                 tileTransform = tileTransform.PreConcat(transform.ToSKMatrix());
@@ -326,8 +334,8 @@ public readonly struct BrushConstructor(Size targetSize, IBrush? brush, BlendMod
         {
             if (perlinNoiseBrush.Transform != null)
             {
-                Point transformOrigin = perlinNoiseBrush.TransformOrigin.ToPixels(TargetSize);
-                var offset = Matrix.CreateTranslation(transformOrigin);
+                Point transformOrigin = perlinNoiseBrush.TransformOrigin.ToPixels(Bounds.Size);
+                var offset = Matrix.CreateTranslation(transformOrigin + Bounds.Position);
                 Matrix transform = (-offset) * perlinNoiseBrush.Transform.Value * offset;
 
                 if (!transform.IsIdentity)

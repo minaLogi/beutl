@@ -43,6 +43,12 @@
                 <ResourceInclude Source="/Styling/PropertyEditors/StorageFileEditor.axaml" />
                 <ResourceInclude Source="/Styling/PropertyEditors/FontFamilyEditor.axaml" />
                 <ResourceInclude Source="/Styling/PropertyEditors/FontFamilyPicker.axaml" />
+                <ResourceInclude Source="/Styling/PropertyEditors/ColorComponentsEditor.axaml" />
+                <ResourceInclude Source="/Styling/PropertyEditors/SimpleColorPicker.axaml" />
+                <ResourceInclude Source="/Styling/PropertyEditors/DraggablePickerFlyoutPresenter.axaml" />
+                <ResourceInclude Source="/Styling/PropertyEditors/SimpleColorPickerFlyoutPresenter.axaml" />
+                <ResourceInclude Source="/Styling/PropertyEditors/BrushEditorFlyoutPresenter.axaml" />
+                <ResourceInclude Source="/Styling/PropertyEditors/GradientStopsSlider.axaml" />
             </ResourceDictionary.MergedDictionaries>
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Default">
@@ -74,11 +80,11 @@
         </ResourceDictionary>
     </Styles.Resources>
 
-    <Style Selector="PopupRoot">
+    <!--<Style Selector="PopupRoot">
         <Setter Property="TransparencyLevelHint" Value="AcrylicBlur" />
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="TransparencyBackgroundFallback" Value="Transparent" />
-    </Style>
+    </Style>-->
     <Style Selector="MenuFlyoutPresenter /template/ Border#LayoutRoot">
         <Setter Property="Background">
             <SolidColorBrush Opacity="0.725" Color="{DynamicResource SolidBackgroundFillColorBase}" />

@@ -1,4 +1,5 @@
-﻿using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
 using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
 
@@ -21,6 +22,7 @@ public class TextBlock : Drawable
     public static readonly CoreProperty<float> SpacingProperty;
     public static readonly CoreProperty<string?> TextProperty;
     public static readonly CoreProperty<IPen?> PenProperty;
+    public static readonly CoreProperty<bool> SplitByCharactersProperty;
     public static readonly CoreProperty<TextElements?> ElementsProperty;
     private FontFamily? _fontFamily = FontFamily.Default;
     private FontWeight _fontWeight = FontWeight.Regular;
@@ -29,6 +31,7 @@ public class TextBlock : Drawable
     private float _spacing;
     private string? _text = string.Empty;
     private IPen? _pen = null;
+    private bool _splitByCharacters = false;
     private TextElements? _elements;
     private bool _isDirty;
 
@@ -68,6 +71,10 @@ public class TextBlock : Drawable
             .Accessor(o => o.Pen, (o, v) => o.Pen = v)
             .Register();
 
+        SplitByCharactersProperty = ConfigureProperty<bool, TextBlock>(nameof(SplitByCharacters))
+            .Accessor(o => o.SplitByCharacters, (o, v) => o.SplitByCharacters = v)
+            .Register();
+
         ElementsProperty = ConfigureProperty<TextElements?, TextBlock>(nameof(Elements))
             .Accessor(o => o.Elements, (o, v) => o.Elements = v)
             .Register();
@@ -80,6 +87,7 @@ public class TextBlock : Drawable
             SpacingProperty,
             TextProperty,
             PenProperty,
+            SplitByCharactersProperty,
             ElementsProperty);
     }
 
@@ -132,11 +140,18 @@ public class TextBlock : Drawable
         set => SetAndRaise(TextProperty, ref _text, value);
     }
 
-    [Display(GroupName = "Pen")]
+    [Display(Name = nameof(Strings.Stroke), GroupName = nameof(Strings.Stroke), ResourceType = typeof(Strings))]
     public IPen? Pen
     {
         get => _pen;
         set => SetAndRaise(PenProperty, ref _pen, value);
+    }
+
+    [Display(Name = nameof(Strings.SplitByCharacters), ResourceType = typeof(Strings))]
+    public bool SplitByCharacters
+    {
+        get => _splitByCharacters;
+        set => SetAndRaise(SplitByCharactersProperty, ref _splitByCharacters, value);
     }
 
     [NotAutoSerialized]
@@ -144,47 +159,6 @@ public class TextBlock : Drawable
     {
         get => _elements;
         set => SetAndRaise(ElementsProperty, ref _elements, value);
-    }
-
-    [ObsoleteSerializationApi]
-    public override void ReadFromJson(JsonObject json)
-    {
-        base.ReadFromJson(json);
-        if (json.TryGetPropertyValue("elements", out JsonNode? elmsNode)
-            && elmsNode is JsonArray elnsArray)
-        {
-            var array = new TextElement[elnsArray.Count];
-            for (int i = 0; i < elnsArray.Count; i++)
-            {
-                if (elnsArray[i] is JsonObject elmNode)
-                {
-                    var elm = new TextElement();
-                    elm.ReadFromJson(elmNode);
-                    array[i] = elm;
-                }
-            }
-
-            Elements = new TextElements(array);
-        }
-    }
-
-    [ObsoleteSerializationApi]
-    public override void WriteToJson(JsonObject json)
-    {
-        base.WriteToJson(json);
-        OnUpdateText();
-        if (_elements != null)
-        {
-            var array = new JsonArray(_elements.Count);
-            for (int i = 0; i < _elements.Count; i++)
-            {
-                var node = new JsonObject();
-                _elements[i].WriteToJson(node);
-                array[i] = node;
-            }
-
-            json["elements"] = array;
-        }
     }
 
     public override void Serialize(ICoreSerializationContext context)
@@ -211,12 +185,17 @@ public class TextBlock : Drawable
 
         if (_elements != null)
         {
+            float lastDescent = 0f;
             foreach (Span<FormattedText> line in _elements.Lines)
             {
                 Size bounds = MeasureLine(line);
                 width = MathF.Max(bounds.Width, width);
                 height += bounds.Height;
+
+                lastDescent = MinDescent(line);
             }
+
+            height -= lastDescent;
         }
 
         return new Size(width, height);
@@ -239,7 +218,7 @@ public class TextBlock : Drawable
                 if (item.Text.Length > 0)
                 {
                     point += new Point(prevRight + item.Spacing / 2, 0);
-                    Size elementBounds = item.Bounds;
+                    Rect elementBounds = item.Bounds;
 
                     item.AddToSKPath(skpath, point);
 
@@ -258,23 +237,39 @@ public class TextBlock : Drawable
         OnUpdateText();
         if (_elements != null)
         {
+            if (SplitByCharacters)
+            {
+                DrawSplitted(canvas, _elements);
+            }
+            else
+            {
+                DrawGrouped(canvas, _elements);
+            }
+        }
+    }
+
+    private void DrawGrouped(ICanvas canvas, TextElements elements)
+    {
+        using (canvas.Push())
+        {
             float prevBottom = 0;
-            foreach (Span<FormattedText> line in _elements.Lines)
+            foreach (Span<FormattedText> line in elements.Lines)
             {
                 Size lineBounds = MeasureLine(line);
                 float ascent = MinAscent(line);
+                float descent = MinDescent(line);
 
-                using (canvas.PushTransform(Matrix.CreateTranslation(0, prevBottom - ascent)))
+                using (canvas.PushTransform(Matrix.CreateTranslation(0, prevBottom - ascent - descent)))
                 {
                     float prevRight = 0;
                     foreach (FormattedText item in line)
                     {
                         if (item.Text.Length > 0)
                         {
+                            Rect elementBounds = item.Bounds;
+
                             using (canvas.PushTransform(Matrix.CreateTranslation(prevRight + item.Spacing / 2, 0)))
                             {
-                                Size elementBounds = item.Bounds;
-
                                 canvas.DrawText(item, item.Brush ?? Fill, item.Pen ?? Pen);
 
                                 prevRight += elementBounds.Width + item.Spacing;
@@ -288,10 +283,79 @@ public class TextBlock : Drawable
         }
     }
 
+    private void DrawSplitted(ICanvas canvas, TextElements elements)
+    {
+        float prevBottom = 0;
+        foreach (Span<FormattedText> line in elements.Lines)
+        {
+            Size lineBounds = MeasureLine(line);
+            float ascent = MinAscent(line);
+            float descent = MinDescent(line);
+            float yPosition = prevBottom - ascent - descent;
+
+            float prevRight = 0;
+            foreach (FormattedText item in line)
+            {
+                if (item.Text.Length > 0)
+                {
+                    Rect elementBounds = item.Bounds;
+
+                    foreach (Geometry geometry in item.ToGeometies())
+                    {
+                        using (canvas.PushTransform(Matrix.CreateTranslation(prevRight + item.Spacing / 2, yPosition)))
+                        {
+                            canvas.DrawGeometry(geometry, item.Brush ?? Fill, item.Pen ?? Pen);
+                        }
+                    }
+
+                    prevRight += elementBounds.Width + item.Spacing;
+                }
+            }
+
+            prevBottom += lineBounds.Height;
+            yPosition = prevBottom - ascent - descent;
+        }
+    }
+
     private void OnInvalidated(object? sender, RenderInvalidatedEventArgs e)
     {
-        if (e.PropertyName is not nameof(Elements))
+        if (ReferenceEquals(e.Sender, this)
+            && e.PropertyName is nameof(FontStyle)
+                or nameof(FontFamily)
+                or nameof(FontWeight)
+                or nameof(Text)
+                or nameof(Size)
+                or nameof(Fill)
+                or nameof(Spacing)
+                or nameof(Pen))
+        {
             _isDirty = true;
+        }
+    }
+
+    protected override void OnPropertyChanged(PropertyChangedEventArgs args)
+    {
+        base.OnPropertyChanged(args);
+        if (args is CorePropertyChangedEventArgs e)
+        {
+            if (e.Property == FillProperty || e.Property == PenProperty)
+            {
+                void OnBrushOrPenInvalidated(object? sender, RenderInvalidatedEventArgs e)
+                {
+                    _isDirty = true;
+                }
+
+                if (e.OldValue is IAffectsRender oldValue)
+                {
+                    oldValue.Invalidated -= OnBrushOrPenInvalidated;
+                }
+
+                if (e.NewValue is IAffectsRender newValue)
+                {
+                    newValue.Invalidated += OnBrushOrPenInvalidated;
+                }
+            }
+        }
     }
 
     private void OnUpdateText()
@@ -327,15 +391,15 @@ public class TextBlock : Drawable
         float width = 0;
         float height = 0;
 
-        foreach (FormattedText element in items)
+        foreach (FormattedText item in items)
         {
-            if (element.Text.Length > 0)
+            if (item.Text.Length > 0)
             {
-                Size bounds = element.Bounds;
+                Rect bounds = item.Bounds;
                 width += bounds.Width;
-                width += element.Spacing;
+                width += item.Spacing;
 
-                height = MathF.Max(bounds.Height, height);
+                height = MathF.Max(item.Metrics.Leading + item.Metrics.Descent - item.Metrics.Ascent, height);
             }
         }
 
@@ -351,6 +415,17 @@ public class TextBlock : Drawable
         }
 
         return ascent;
+    }
+
+    private static float MinDescent(Span<FormattedText> items)
+    {
+        float descent = float.MaxValue;
+        foreach (FormattedText item in items)
+        {
+            descent = MathF.Min(item.Metrics.Descent, descent);
+        }
+
+        return descent;
     }
 
     public override void ApplyAnimations(IClock clock)

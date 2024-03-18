@@ -1,8 +1,10 @@
 ﻿using Beutl.Api.Services;
 using Beutl.Configuration;
+using Beutl.Helpers;
+using Beutl.Logging;
 using Beutl.Rendering;
 
-using Serilog;
+using Microsoft.Extensions.Logging;
 
 namespace Beutl.Services;
 
@@ -10,10 +12,12 @@ public static class UnhandledExceptionHandler
 {
     private const string LastUnhandledExeptionFileName = "last-unhandled-exeption";
     private static bool s_exited;
+    private static ILogger? s_logger;
 
     public static void Initialize()
     {
         AppDomain.CurrentDomain.UnhandledException += OnUnhandledException;
+        s_logger = Log.LoggerFactory.CreateLogger(typeof(UnhandledExceptionHandler));
     }
 
     // 最後に実行されたとき、例外が発生して終了したかどうか。
@@ -28,8 +32,7 @@ public static class UnhandledExceptionHandler
         {
             if (e.ExceptionObject is Exception ex)
             {
-                Log.Fatal(ex, "An unhandled exception occurred. (IsTerminating: {IsTerminating})", e.IsTerminating);
-                Telemetry.Exception(ex, true);
+                s_logger?.LogCritical(ex, "An unhandled exception occurred. (IsTerminating: {IsTerminating})", e.IsTerminating);
                 SaveException(ex);
 
                 //var stack = new StackTrace();
@@ -41,11 +44,14 @@ public static class UnhandledExceptionHandler
 
             string exePath = Path.Combine(
                 AppContext.BaseDirectory,
-                OperatingSystem.IsWindows() ? "Beutl.ExceptionHandler.exe" : "Beutl.ExceptionHandler");
-            Process.Start(new ProcessStartInfo(exePath)
+                "Beutl.ExceptionHandler");
+
+            var startInfo = new ProcessStartInfo()
             {
                 UseShellExecute = true
-            });
+            };
+            DotNetProcess.Configure(startInfo, exePath);
+            Process.Start(startInfo);
         }
         catch
         {
@@ -68,11 +74,12 @@ public static class UnhandledExceptionHandler
         if (!s_exited)
         {
             GlobalConfiguration.Instance.Save(GlobalConfiguration.DefaultFilePath);
-            BeutlApplication.Current.LoggerFactory.Dispose();
 
             SharedGPUContext.Shutdown();
             SharedGRContext.Shutdown();
-            RenderThread.Dispatcher.Stop();
+            RenderThread.Dispatcher.Shutdown();
+
+            BeutlApplication.Current.LoggerFactory.Dispose();
 
             s_exited = true;
         }
