@@ -16,6 +16,16 @@ namespace Beutl;
 
 public static class AvaloniaTypeConverter
 {
+    public static Avalonia.Vector ToAvaVector(this in Graphics.Vector vector)
+    {
+        return new(vector.X, vector.Y);
+    }
+    
+    public static Graphics.Vector ToBtlVector(this in Avalonia.Vector vector)
+    {
+        return new((float)vector.X, (float)vector.Y);
+    }
+
     public static Media.Color ToBtlColor(this FluentAvalonia.UI.Media.Color2 c)
     {
         return new Media.Color(c.A, c.R, c.G, c.B);
@@ -362,5 +372,10 @@ public static class AvaloniaTypeConverter
         }
 
         return null;
+    }
+
+    public static Vector SwapAxis(this Vector vector)
+    {
+        return new(vector.Y, vector.X);
     }
 }

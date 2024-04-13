@@ -32,6 +32,8 @@ public sealed class ListItemAccessorImpl<T> : IAbstractProperty<T>
 
     public int Index { get; set; }
 
+    public string? Description => null;
+
     public object? GetDefaultValue()
     {
         return default(T);
@@ -400,6 +402,15 @@ public sealed class ListEditorViewModel<TItem> : BaseEditorViewModel, IListEdito
         foreach (ListItemEditorViewModel<TItem> item in Items)
         {
             item.Context?.Accept(visitor);
+        }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        base.Dispose(disposing);
+        foreach (ListItemEditorViewModel<TItem> item in Items)
+        {
+            item.Dispose();
         }
     }
 

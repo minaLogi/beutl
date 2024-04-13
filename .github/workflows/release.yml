@@ -27,7 +27,7 @@ jobs:
     runs-on: windows-latest
     strategy:
       matrix:
-        rid: [linux_x64, win_x64]
+        rid: [linux_x64, win_x64, osx_arm64]
 
     steps:
       - name: Checkout
@@ -113,7 +113,7 @@ jobs:
         with:
           name: beutl-setup
           path: ./artifacts/beutl-setup.exe
-  
+
   build-debian-package:
     needs: [determine-version, build-executable]
     runs-on: ubuntu-latest
@@ -173,8 +173,44 @@ jobs:
       - name: Save package
         uses: actions/upload-artifact@v4
         with:
-          name: beutl_${{needs.determine-version.outputs.simpleVer}}-${{needs.determine-version.outputs.revision}}ubuntu22.04_amd64.deb
+          name: ubuntu22.04_amd64
           path: ./packages/beutl_${{needs.determine-version.outputs.simpleVer}}-${{needs.determine-version.outputs.revision}}ubuntu22.04_amd64.deb
+
+  build-app-bundle:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        rid: [osx_x64, osx_arm64]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: |
+          chmod +x build.sh
+          ./build.sh Restore
+  
+      - name: Bundle
+        run: ./build.sh bundleApp --runtime ${{matrix.rid}} --skip restore
+
+      - name: Zip
+        run: |
+          mkdir -p artifacts
+          cd output/AppBundle
+          zip ../../artifacts/Beutl.${{matrix.rid}}.app.zip -r Beutl.app 
+  
+      - name: Save
+        uses: actions/upload-artifact@v4
+        with:
+          name: Beutl_${{matrix.rid}}
+          path: artifacts/Beutl.${{matrix.rid}}.app.zip
 
   build-nuget:
     needs: [determine-version]
@@ -194,27 +230,29 @@ jobs:
         run: ./build.cmd Restore
   
       - name: Build & Pack
-        run: dotnet pack --no-restore -f net8.0 -c Release --output ../../artifacts
-        working-directory: ./packages/Beutl.Sdk
-
+        run: ./build.cmd NuGetPack --skip Restore
+  
       - name: Save
         uses: actions/upload-artifact@v4
         with:
-          name: Beutl.Sdk.${{needs.determine-version.outputs.semVer}}
-          path: ./artifacts/Beutl.Sdk.${{needs.determine-version.outputs.semVer}}.nupkg
+          name: Packages
+          path: ./artifacts/*.nupkg
 
   create-release:
-    needs: [build-executable, build-windows-installer, build-debian-package, build-nuget]
+    needs: [build-executable, build-windows-installer, build-debian-package, build-nuget, build-app-bundle]
     runs-on: windows-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
 
+      - name: Print
+        run: ls artifacts
+
       - uses: ncipollo/release-action@v1
         id: create_release
         with:
-          artifacts: "artifacts/**/*.zip,artifacts/**/*.nupkg,artifacts/**/*.deb,artifacts/beutl-setup.exe"
+          artifacts: "artifacts/**/*.zip,artifacts/**/*.nupkg,artifacts/**/*.deb,artifacts/beutl-setup/beutl-setup.exe"
           draft: true
           makeLatest: true
           generateReleaseNotes: true

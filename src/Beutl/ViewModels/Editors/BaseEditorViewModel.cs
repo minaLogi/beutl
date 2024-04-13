@@ -34,6 +34,7 @@ public abstract class BaseEditorViewModel : IPropertyEditorContext, IServiceProv
         WrappedProperty = property;
 
         Header = property.DisplayName;
+        Description = property.Description;
 
         IObservable<bool> hasAnimation = property is IAbstractAnimatableProperty anm
             ? anm.ObserveAnimation.Select(x => x != null)
@@ -51,7 +52,7 @@ public abstract class BaseEditorViewModel : IPropertyEditorContext, IServiceProv
             .AddTo(Disposables);
 
         HasAnimation = hasAnimation
-            .ToReadOnlyReactivePropertySlim()
+            .ToReadOnlyReactiveProperty()
             .AddTo(Disposables);
 
         if (property is IAbstractAnimatableProperty animatableProperty)
@@ -59,7 +60,7 @@ public abstract class BaseEditorViewModel : IPropertyEditorContext, IServiceProv
             KeyFrameCount = animatableProperty.ObserveAnimation
                 .Select(x => (x as IKeyFrameAnimation)?.KeyFrames.ObserveProperty(y => y.Count) ?? Observable.Return(0))
                 .Switch()
-                .ToReadOnlyReactivePropertySlim()
+                .ToReadOnlyReactiveProperty()
                 .DisposeWith(Disposables);
 
             KeyFrameIndex
@@ -109,7 +110,7 @@ public abstract class BaseEditorViewModel : IPropertyEditorContext, IServiceProv
         }
         else
         {
-            KeyFrameCount = new ReadOnlyReactivePropertySlim<int>(Observable.Return(0));
+            KeyFrameCount = new ReadOnlyReactiveProperty<int>(Observable.Return(0));
         }
     }
 
@@ -125,17 +126,19 @@ public abstract class BaseEditorViewModel : IPropertyEditorContext, IServiceProv
 
     public string Header { get; }
 
+    public string? Description { get; }
+
     public ReadOnlyReactivePropertySlim<bool> CanEdit { get; }
 
     public ReadOnlyReactivePropertySlim<bool> IsReadOnly { get; }
 
-    public ReadOnlyReactivePropertySlim<bool> HasAnimation { get; }
+    public ReadOnlyReactiveProperty<bool> HasAnimation { get; }
 
     public ReactivePropertySlim<bool> IsSymbolIconFilled { get; } = new();
 
     public ReactivePropertySlim<IKeyFrame?> EditingKeyFrame { get; } = new();
 
-    public ReadOnlyReactivePropertySlim<int> KeyFrameCount { get; }
+    public ReadOnlyReactiveProperty<int> KeyFrameCount { get; }
 
     public ReactivePropertySlim<float> KeyFrameIndex { get; } = new();
 
@@ -228,6 +231,7 @@ public abstract class BaseEditorViewModel : IPropertyEditorContext, IServiceProv
         {
             editor[!PropertyEditor.IsReadOnlyProperty] = IsReadOnly.ToBinding();
             editor.Header = Header;
+            editor.Description = Description;
             if (WrappedProperty is IAbstractAnimatableProperty animatableProperty)
             {
                 editor[!PropertyEditor.KeyFrameCountProperty] = KeyFrameCount.ToBinding();
@@ -300,13 +304,13 @@ public abstract class BaseEditorViewModel<T> : BaseEditorViewModel
     {
         EditingKeyFrame = base.EditingKeyFrame
             .Select(x => x as KeyFrame<T>)
-            .ToReadOnlyReactivePropertySlim()
+            .ToReadOnlyReactiveProperty()
             .DisposeWith(Disposables);
     }
 
     public new IAbstractProperty<T> WrappedProperty => (IAbstractProperty<T>)base.WrappedProperty;
 
-    public new ReadOnlyReactivePropertySlim<KeyFrame<T>?> EditingKeyFrame { get; }
+    public new ReadOnlyReactiveProperty<KeyFrame<T>?> EditingKeyFrame { get; }
 
     public sealed override void Reset()
     {

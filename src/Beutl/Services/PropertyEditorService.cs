@@ -133,6 +133,8 @@ public static class PropertyEditorService
         private static readonly Dictionary<Type, ListItemEditor> s_listItemEditorsOverride = new()
         {
             { typeof(FilterEffect), new(_ => new FilterEffectListItemEditor(), s => new FilterEffectEditorViewModel(s.ToTyped<FilterEffect?>())) },
+            { typeof(PathSegment), new(_ => new PathOperationListItemEditor(), s => new PathOperationEditorViewModel(s.ToTyped<PathSegment?>())) },
+            { typeof(PathFigure), new(_ => new PathFigureListItemEditor(), s => new PathFigureEditorViewModel(s.ToTyped<PathFigure>())) },
             { typeof(ISoundEffect), new(_ => new SoundEffectListItemEditor(), s => new SoundEffectEditorViewModel(s.ToTyped<ISoundEffect?>())) },
             { typeof(ITransform), new(_ => new TransformListItemEditor(), s => new TransformEditorViewModel(s.ToTyped<ITransform?>())) }
         };
@@ -157,6 +159,7 @@ public static class PropertyEditorService
             new(typeof(ushort), new(_ => new NumberEditor<ushort>(), s => new NumberEditorViewModel<ushort>(s.ToTyped<ushort>()))),
             new(typeof(uint), new(_ => new NumberEditor<uint>(), s => new NumberEditorViewModel<uint>(s.ToTyped<uint>()))),
             new(typeof(ulong), new(_ => new NumberEditor<ulong>(), s => new NumberEditorViewModel<ulong>(s.ToTyped<ulong>()))),
+            new(typeof(Rational), new(_ => new RationalEditor(), s => new RationalEditorViewModel(s.ToTyped<Rational>()))),
 
             new(typeof(bool), new(_ => new BooleanEditor(), s => new BooleanEditorViewModel(s.ToTyped<bool>()))),
             new(typeof(string), new(_ => new StringEditor(), s => new StringEditorViewModel(s.ToTyped<string?>()))),
@@ -192,6 +195,7 @@ public static class PropertyEditorService
             new(typeof(IBrush), new(_ => new BrushEditor(), s => new BrushEditorViewModel(s))),
             new(typeof(IPen), new(_ => new PenEditor(), s => new PenEditorViewModel(s))),
             new(typeof(FilterEffect), new(_ => new FilterEffectEditor(), s => new FilterEffectEditorViewModel(s.ToTyped<FilterEffect?>()))),
+            new(typeof(Geometry), new(_ => new GeometryEditor(), s => new GeometryEditorViewModel(s.ToTyped<Geometry?>()))),
             new(typeof(ISoundEffect), new(_ => new SoundEffectEditor(), s => new SoundEffectEditorViewModel(s.ToTyped<ISoundEffect?>()))),
             new(typeof(ITransform), new(_ => new TransformEditor(), s => new TransformEditorViewModel(s.ToTyped<ITransform?>()))),
             new(typeof(GradientStops), new(_ => new GradientStopsEditor(), s => new GradientStopsEditorViewModel(s.ToTyped<GradientStops>()))),
