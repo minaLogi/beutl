@@ -5,16 +5,31 @@ on:
   workflow_dispatch:
 
 jobs:
+  determine-version:
+    runs-on: ubuntu-latest
+    outputs:
+      nugetVer: ${{ steps.nbgv.outputs.NuGetPackageVersion }}
+      asmVer: ${{ steps.nbgv.outputs.AssemblyFileVersion }}
+      infoVer: ${{ steps.nbgv.outputs.AssemblyInformationalVersion }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Nerdbank.GitVersioning
+        id: nbgv
+        uses: dotnet/nbgv@v0.4.2
+
   daily-build:
-    runs-on: windows-latest
+    needs: [determine-version]
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         rid: [linux_x64, win_x64, osx_x64, osx_arm64]
     steps:
     - name: Checkout
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
@@ -22,41 +37,55 @@ jobs:
         global-json-file: global.json
 
     - name: Restore
-      run: ./build.cmd Restore
+      run: |
+        chmod +x build.sh
+        ./build.sh restore
 
     - name: Build
-      run: ./build.cmd Publish --runtime ${{matrix.rid}} --skip Restore
+      run: |
+        ./build.sh publish \
+          --runtime ${{ matrix.rid }} \
+          --skip restore \
+          --version ${{ needs.determine-version.outputs.nugetVer }} \
+          --assembly-version ${{ needs.determine-version.outputs.asmVer }} \
+          --informational-version ${{ needs.determine-version.outputs.infoVer }}
 
     - if: ${{ matrix.rid == 'linux_x64' }}
       name: Download libOpenCvSharpExtern.so
-      shell: pwsh
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
-        $Packages = dotnet list src/Beutl.Engine/Beutl.Engine.csproj package --framework net8.0 --format json
+        PACKAGES_JSON=`dotnet list src/Beutl.Engine/Beutl.Engine.csproj package --framework net8.0 --format json`
 
         #4.9.0.2024
-        $OpenCvSharpVersion = (echo $Packages | jq -r '.projects[0].frameworks[0].topLevelPackages | map(select(.id == "OpenCvSharp4"))[0].requestedVersion')
+        OPENCVSHARP_VERSION=`echo $PACKAGES_JSON | jq -r '.projects[0].frameworks[0].topLevelPackages | map(select(.id == "OpenCvSharp4"))[0].requestedVersion'`
+        echo $OPENCVSHARP_VERSION
 
         #4.9.0
-        $OpenCvVersion = [System.String]::Join('.', [System.Linq.Enumerable]::Take($OpenCvSharpVersion.Split('.'), 3))
+        OPENCV_VERSION=`echo $OPENCVSHARP_VERSION | cut -d '.' -f 1-3`
+        echo $OPENCV_VERSION
 
         #GitのタグとNuGetのバージョンが違う場合があるので
-        $Filter = 'map(select(.tag_name | startswith("'+$OpenCvVersion+'")))[0].tag_name'
-        $OpenCvSharpTag = (gh api -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" /repos/shimat/opencvsharp/releases | jq -r $Filter)
+        RELEASES_JSON=`gh api -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" /repos/shimat/opencvsharp/releases`
+        FILTER='map(select(.tag_name | startswith("'$OPENCV_VERSION'")))[0].tag_name'
+        OPENCVSHARP_TAG=`echo "$RELEASES_JSON" | jq -r "$FILTER"`
 
         #ダウンロード
-        $Release = (gh api -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" /repos/indigo-san/opencvsharp-extern-builds/releases/tags/$OpenCvSharpTag)
-        $AssetId = (echo $Release | jq '.assets | map(select(.name == "libOpenCvSharpExtern.so"))[0].id')
+        RELEASE=`gh api -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" /repos/indigo-san/opencvsharp-extern-builds/releases/tags/$OPENCVSHARP_TAG`
+        ASSET_ID=`echo "$RELEASE" | jq '.assets | map(select(.name == "libOpenCvSharpExtern.so"))[0].id'`
 
         cd output/Beutl
-        gh api -H "Accept: application/octet-stream" -H "X-GitHub-Api-Version: 2022-11-28" /repos/indigo-san/opencvsharp-extern-builds/releases/assets/$AssetId > libOpenCvSharpExtern.so
+        gh api -H "Accept: application/octet-stream" -H "X-GitHub-Api-Version: 2022-11-28" /repos/indigo-san/opencvsharp-extern-builds/releases/assets/$ASSET_ID > libOpenCvSharpExtern.so
 
     - name: Zip
-      run: ./build.cmd Zip --runtime ${{matrix.rid}} --skip Publish
+      run: |
+        ./build.sh zip \
+          --runtime ${{ matrix.rid }} \
+          --skip publish \
+          --version ${{ needs.determine-version.outputs.nugetVer }}
 
     - name: Save
       uses: actions/upload-artifact@v4
       with:
-        name: beutl_${{matrix.rid}}
+        name: beutl_${{ matrix.rid }}
         path: ./artifacts/
